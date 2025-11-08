@@ -84,7 +84,7 @@ class Message(models.Model):
     message_type = models.CharField(max_length=10, choices=MESSAGE_TYPE_CHOICES, default='text', verbose_name='메시지 타입')
     content = models.TextField(verbose_name='메시지 내용 (암호화된 내용)')
     encrypted_content = models.TextField(null=True, blank=True, verbose_name='암호화된 원본 내용')
-    asset = models.ForeignKey('accounts.Asset', on_delete=models.SET_NULL, null=True, blank=True, verbose_name='첨부 파일')
+    asset = models.ForeignKey('common.Asset', on_delete=models.SET_NULL, null=True, blank=True, verbose_name='첨부 파일')
     reply_to = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='replies', verbose_name='답장 대상')
     is_read = models.BooleanField(default=False, verbose_name='읽음 여부')
     created_at = models.DateTimeField(auto_now_add=True)
@@ -141,3 +141,48 @@ class ChatFolderRoom(models.Model):
     
     def __str__(self):
         return f"{self.room} in {self.folder.name}"
+
+
+class GroupChatInvitation(models.Model):
+    """그룹챗 초대 모델"""
+    STATUS_CHOICES = [
+        ('pending', '대기중'),
+        ('accepted', '수락됨'),
+        ('rejected', '거절됨'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    room = models.ForeignKey(ChatRoom, on_delete=models.CASCADE, related_name='invitations', verbose_name='채팅방')
+    inviter = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_invitations', verbose_name='초대자')
+    invitee = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_invitations', verbose_name='초대받은 사람')
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending', verbose_name='상태')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'group_chat_invitations'
+        verbose_name = '그룹챗 초대'
+        verbose_name_plural = '그룹챗 초대'
+        unique_together = [['room', 'invitee']]
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['invitee', 'status']),
+            models.Index(fields=['room', 'status']),
+        ]
+    
+    def __str__(self):
+        return f"{self.inviter.name} -> {self.invitee.name} ({self.room.name}) ({self.status})"
+    
+    def clean(self):
+        """검증: 그룹챗만 초대 가능, 이미 멤버인 경우 초대 불가"""
+        from django.core.exceptions import ValidationError
+        
+        if self.room.room_type != 'group':
+            raise ValidationError('그룹챗에만 초대할 수 있습니다.')
+        
+        if ChatRoomMember.objects.filter(room=self.room, user=self.invitee).exists():
+            raise ValidationError('이미 채팅방 멤버입니다.')
+    
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)

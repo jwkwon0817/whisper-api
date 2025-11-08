@@ -1,4 +1,5 @@
 import re
+from typing import Any, Dict
 
 from django.conf import settings
 from django.contrib.auth import authenticate
@@ -6,10 +7,11 @@ from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
+from common.models import Asset
 from utils.encryption import EncryptionService
 from utils.s3_utils import S3Uploader
 
-from .models import Asset, User
+from .models import User
 from .utils import PhoneVerificationStorage
 
 
@@ -72,7 +74,7 @@ class UserSerializer(serializers.ModelSerializer):
         fields = ['id', 'name', 'profile_image', 'public_key', 'masked_phone_number', 'created_at']
         read_only_fields = ['id', 'created_at', 'masked_phone_number']
     
-    def get_masked_phone_number(self, obj):
+    def get_masked_phone_number(self, obj: User) -> str:
         """마스킹된 전화번호 반환"""
         return obj.get_masked_phone_number()
 
@@ -114,12 +116,15 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=True, validators=[validate_password])
     profile_image = serializers.ImageField(required=False, allow_null=True)
     verified_token = serializers.CharField(required=True, write_only=True)
+    public_key = serializers.CharField(required=False, allow_blank=True, allow_null=True, 
+                                       help_text='E2EE 공개키 (PEM 형식). 선택사항이며 나중에 프로필 수정으로 추가 가능합니다.')
     
     class Meta:
         model = User
-        fields = ['phone_number', 'name', 'password', 'profile_image', 'verified_token']
+        fields = ['phone_number', 'name', 'password', 'profile_image', 'verified_token', 'public_key']
         extra_kwargs = {
-            'profile_image': {'required': False}
+            'profile_image': {'required': False},
+            'public_key': {'required': False}
         }
     
     def validate_verified_token(self, value):
@@ -142,6 +147,19 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         for user in User.objects.all():
             if EncryptionService.check_phone_number(value, user.phone_number):
                 raise serializers.ValidationError("이미 가입된 전화번호입니다.")
+        return value
+    
+    def validate_public_key(self, value):
+        """공개키 형식 검증 (PEM 형식 확인)"""
+        if not value:
+            return value
+        
+        # PEM 형식 검증 (간단한 검증)
+        if not value.startswith('-----BEGIN PUBLIC KEY-----'):
+            raise serializers.ValidationError("공개키는 PEM 형식이어야 합니다.")
+        if not value.endswith('-----END PUBLIC KEY-----'):
+            raise serializers.ValidationError("공개키는 PEM 형식이어야 합니다.")
+        
         return value
     
     def create(self, validated_data):
@@ -179,6 +197,27 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         return user
 
 
+class PublicKeySerializer(serializers.Serializer):
+    """공개키 등록 시리얼라이저"""
+    public_key = serializers.CharField(
+        required=True,
+        help_text='E2EE 공개키 (PEM 형식)'
+    )
+    
+    def validate_public_key(self, value):
+        """공개키 형식 검증 (PEM 형식 확인)"""
+        if not value:
+            raise serializers.ValidationError("공개키는 필수입니다.")
+        
+        # PEM 형식 검증
+        if not value.startswith('-----BEGIN PUBLIC KEY-----'):
+            raise serializers.ValidationError("공개키는 PEM 형식이어야 합니다.")
+        if not value.endswith('-----END PUBLIC KEY-----'):
+            raise serializers.ValidationError("공개키는 PEM 형식이어야 합니다.")
+        
+        return value
+
+
 class UserUpdateSerializer(serializers.ModelSerializer):
     """사용자 정보 수정 시리얼라이저"""
     profile_image = serializers.ImageField(required=False, allow_null=True)
@@ -186,6 +225,19 @@ class UserUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ['name', 'profile_image', 'public_key']
+    
+    def validate_public_key(self, value):
+        """공개키 형식 검증 (PEM 형식 확인)"""
+        if not value:
+            return value
+        
+        # PEM 형식 검증
+        if not value.startswith('-----BEGIN PUBLIC KEY-----'):
+            raise serializers.ValidationError("공개키는 PEM 형식이어야 합니다.")
+        if not value.endswith('-----END PUBLIC KEY-----'):
+            raise serializers.ValidationError("공개키는 PEM 형식이어야 합니다.")
+        
+        return value
     
     def update(self, instance, validated_data):
         profile_image_file = validated_data.pop('profile_image', None)
@@ -210,6 +262,75 @@ class UserUpdateSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({'profile_image': f'이미지 업로드 실패: {str(e)}'})
         
         return super().update(instance, validated_data)
+
+
+class DevUserRegistrationSerializer(serializers.ModelSerializer):
+    """개발 모드용 회원가입 시리얼라이저 (전화번호 인증 없이)"""
+    password = serializers.CharField(write_only=True, required=True, validators=[validate_password])
+    profile_image = serializers.ImageField(required=False, allow_null=True)
+    public_key = serializers.CharField(required=False, allow_blank=True, allow_null=True, 
+                                       help_text='E2EE 공개키 (PEM 형식). 선택사항입니다.')
+    
+    class Meta:
+        model = User
+        fields = ['phone_number', 'name', 'password', 'profile_image', 'public_key']
+        extra_kwargs = {
+            'profile_image': {'required': False},
+            'public_key': {'required': False}
+        }
+    
+    def validate_phone_number(self, value):
+        """전화번호 형식 및 중복 확인"""
+        import re
+        pattern = r'^01[0-9]{9}$'
+        if not re.match(pattern, value):
+            raise serializers.ValidationError("올바른 전화번호 형식이 아닙니다. (예: 01012345678)")
+        
+        # 중복 확인
+        from utils.encryption import EncryptionService
+        for user in User.objects.all():
+            if EncryptionService.check_phone_number(value, user.phone_number):
+                raise serializers.ValidationError("이미 가입된 전화번호입니다.")
+        return value
+    
+    def validate_public_key(self, value):
+        """공개키 형식 검증 (PEM 형식 확인)"""
+        if not value:
+            return value
+        
+        # PEM 형식 검증
+        if not value.startswith('-----BEGIN PUBLIC KEY-----'):
+            raise serializers.ValidationError("공개키는 PEM 형식이어야 합니다.")
+        if not value.endswith('-----END PUBLIC KEY-----'):
+            raise serializers.ValidationError("공개키는 PEM 형식이어야 합니다.")
+        
+        return value
+    
+    def create(self, validated_data):
+        """사용자 생성 (인증 토큰 검증 없이)"""
+        profile_image_file = validated_data.pop('profile_image', None)
+        password = validated_data.pop('password')
+        
+        # 프로필 이미지가 있으면 S3에 업로드
+        profile_image_url = None
+        if profile_image_file:
+            uploader = S3Uploader()
+            try:
+                asset, profile_image_url = uploader.upload_file(
+                    profile_image_file,
+                    folder='profiles',
+                    content_type=profile_image_file.content_type
+                )
+            except Exception as e:
+                raise serializers.ValidationError({'profile_image': f'이미지 업로드 실패: {str(e)}'})
+        
+        # 사용자 생성
+        user = User.objects.create_user(
+            password=password,
+            profile_image=profile_image_url,
+            **validated_data
+        )
+        return user
 
 
 class PasswordChangeSerializer(serializers.Serializer):

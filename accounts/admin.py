@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
-from .models import Asset, User
+from .models import User
 
 
 @admin.register(User)
@@ -28,13 +28,4 @@ class UserAdmin(BaseUserAdmin):
     readonly_fields = ['created_at', 'updated_at', 'last_login']
     
     filter_horizontal = []
-
-
-@admin.register(Asset)
-class AssetAdmin(admin.ModelAdmin):
-    list_display = ['original_name', 's3_key', 'content_type', 'file_size', 'created_at']
-    list_filter = ['content_type', 'created_at']
-    search_fields = ['original_name', 's3_key']
-    readonly_fields = ['id', 'created_at', 'updated_at']
-    ordering = ['-created_at']
 

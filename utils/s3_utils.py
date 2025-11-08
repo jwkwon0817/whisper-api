@@ -7,7 +7,7 @@ from botocore.exceptions import ClientError
 from django.conf import settings
 from django.core.files.uploadedfile import UploadedFile
 
-from accounts.models import Asset
+from common.models import Asset
 
 
 class S3Uploader:

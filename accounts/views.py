@@ -1,5 +1,6 @@
 from django.contrib.auth import get_user_model
-from drf_spectacular.utils import OpenApiResponse, extend_schema
+from drf_spectacular.utils import (OpenApiParameter, OpenApiResponse,
+                                   extend_schema)
 from rest_framework import permissions, status
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
@@ -12,8 +13,8 @@ from rest_framework_simplejwt.views import (TokenObtainPairView,
 from .serializers import (CustomTokenObtainPairSerializer,
                           PasswordChangeSerializer,
                           PhoneVerificationSerializer, PhoneVerifySerializer,
-                          UserRegistrationSerializer, UserSerializer,
-                          UserUpdateSerializer)
+                          PublicKeySerializer, UserRegistrationSerializer,
+                          UserSerializer, UserUpdateSerializer)
 from .sms_service import SolapiService
 from .utils import PhoneVerificationStorage, RefreshTokenStorage
 
@@ -28,14 +29,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         tags=['Auth'],
         summary='로그인',
         description='전화번호와 비밀번호로 로그인하고 JWT 토큰을 발급합니다.',
-        request={
-            'type': 'object',
-            'properties': {
-                'phone_number': {'type': 'string', 'description': '전화번호 (예: 01012345678)'},
-                'password': {'type': 'string', 'format': 'password', 'description': '비밀번호'},
-            },
-            'required': ['phone_number', 'password']
-        },
+        request=CustomTokenObtainPairSerializer,
     )
     def post(self, request, *args, **kwargs):
         response = super().post(request, *args, **kwargs)
@@ -134,6 +128,7 @@ class RegisterView(APIView):
                     'password': {'type': 'string', 'format': 'password', 'description': '비밀번호 (최소 8자)'},
                     'verified_token': {'type': 'string', 'description': '전화번호 인증 완료 토큰 (인증번호 검증 API에서 받은 토큰)'},
                     'profile_image': {'type': 'string', 'format': 'binary', 'description': '프로필 이미지 (선택사항)'},
+                    'public_key': {'type': 'string', 'description': 'E2EE 공개키 (PEM 형식, 선택사항)'},
                 },
                 'required': ['phone_number', 'name', 'password', 'verified_token']
             },
@@ -242,7 +237,10 @@ class UserProfileView(APIView):
         description='프로필 사진과 이름을 변경합니다.',
         request=UserUpdateSerializer,
         responses={
-            200: UserUpdateSerializer,
+            200: OpenApiResponse(
+                description='정보 변경 성공',
+                response=UserUpdateSerializer
+            ),
         }
     )
     def patch(self, request):
@@ -263,7 +261,10 @@ class UserMeView(APIView):
         summary='내 정보 조회',
         description='로그인한 사용자의 정보를 조회합니다.',
         responses={
-            200: UserSerializer,
+            200: OpenApiResponse(
+                description='내 정보',
+                response=UserSerializer
+            ),
         }
     )
     def get(self, request):
@@ -308,6 +309,171 @@ class PasswordChangeView(APIView):
         RefreshTokenStorage.delete_all_user_tokens(user.id)
         
         return Response({'message': '비밀번호가 변경되었습니다.'}, status=status.HTTP_200_OK)
+
+
+class PublicKeyView(APIView):
+    """공개키 등록/수정 뷰"""
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = PublicKeySerializer
+    
+    @extend_schema(
+        tags=['User'],
+        summary='공개키 등록/수정',
+        description='E2EE 공개키를 등록하거나 수정합니다.',
+        request=PublicKeySerializer,
+        responses={
+            200: OpenApiResponse(
+                description='공개키 등록 성공',
+                response={
+                    'type': 'object',
+                    'properties': {
+                        'message': {'type': 'string'},
+                        'public_key': {'type': 'string'}
+                    }
+                }
+            ),
+            400: OpenApiResponse(description='잘못된 요청'),
+        }
+    )
+    def post(self, request):
+        """공개키 등록/수정"""
+        serializer = PublicKeySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        public_key = serializer.validated_data['public_key']
+        request.user.public_key = public_key
+        request.user.save(update_fields=['public_key'])
+        
+        return Response({
+            'message': '공개키가 등록되었습니다.',
+            'public_key': public_key
+        }, status=status.HTTP_200_OK)
+
+
+class UserPublicKeyView(APIView):
+    """사용자 공개키 조회 뷰"""
+    permission_classes = [permissions.IsAuthenticated]
+    
+    @extend_schema(
+        tags=['User'],
+        summary='사용자 공개키 조회',
+        description='특정 사용자의 공개키를 조회합니다. (1:1 채팅 생성 시 필요)',
+        responses={
+            200: OpenApiResponse(
+                description='공개키 조회 성공',
+                response={
+                    'type': 'object',
+                    'properties': {
+                        'user_id': {'type': 'string', 'format': 'uuid'},
+                        'name': {'type': 'string'},
+                        'public_key': {'type': 'string', 'nullable': True}
+                    }
+                }
+            ),
+            404: OpenApiResponse(description='사용자를 찾을 수 없음'),
+        }
+    )
+    def get(self, request, user_id):
+        """사용자 공개키 조회"""
+        try:
+            user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return Response(
+                {'error': '사용자를 찾을 수 없습니다.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        return Response({
+            'user_id': str(user.id),
+            'name': user.name,
+            'public_key': user.public_key
+        }, status=status.HTTP_200_OK)
+
+
+class UserSearchView(APIView):
+    """사용자 검색 뷰"""
+    permission_classes = [permissions.IsAuthenticated]
+    
+    @extend_schema(
+        tags=['User'],
+        summary='사용자 검색',
+        description='이름으로 사용자를 검색합니다. (1:1 채팅 생성 시 사용)',
+        parameters=[
+            OpenApiParameter(
+                name='q',
+                type=str,
+                location=OpenApiParameter.QUERY,
+                description='검색어 (이름)',
+                required=True
+            ),
+            OpenApiParameter(
+                name='limit',
+                type=int,
+                location=OpenApiParameter.QUERY,
+                description='결과 개수 제한',
+                required=False,
+                default=20
+            ),
+        ],
+        responses={
+            200: OpenApiResponse(
+                description='검색 성공',
+                response={
+                    'type': 'object',
+                    'properties': {
+                        'results': {
+                            'type': 'array',
+                            'items': {
+                                'type': 'object',
+                                'properties': {
+                                    'id': {'type': 'string', 'format': 'uuid'},
+                                    'name': {'type': 'string'},
+                                    'profile_image': {'type': 'string', 'nullable': True},
+                                    'has_public_key': {'type': 'boolean'}
+                                }
+                            }
+                        },
+                        'count': {'type': 'integer'}
+                    }
+                }
+            ),
+        }
+    )
+    def get(self, request):
+        """사용자 검색"""
+        query = request.query_params.get('q', '').strip()
+        limit = int(request.query_params.get('limit', 20))
+        
+        if not query:
+            return Response(
+                {'error': '검색어를 입력해주세요.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if len(query) < 2:
+            return Response(
+                {'error': '검색어는 최소 2자 이상이어야 합니다.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # 이름으로 검색 (본인 제외)
+        users = User.objects.filter(
+            name__icontains=query
+        ).exclude(id=request.user.id)[:limit]
+        
+        results = []
+        for user in users:
+            results.append({
+                'id': str(user.id),
+                'name': user.name,
+                'profile_image': user.profile_image,
+                'has_public_key': bool(user.public_key)
+            })
+        
+        return Response({
+            'results': results,
+            'count': len(results)
+        }, status=status.HTTP_200_OK)
 
 
 class SendVerificationCodeView(APIView):

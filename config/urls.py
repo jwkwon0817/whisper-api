@@ -8,6 +8,7 @@ from drf_spectacular.views import (SpectacularAPIView, SpectacularRedocView,
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include('accounts.urls')),
+    path('api/', include('friends.urls')),
     path('api/', include('chat.urls')),
     
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),

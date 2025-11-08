@@ -1,8 +1,9 @@
 from django.urls import path
 
 from .views import (CustomTokenObtainPairView, CustomTokenRefreshView,
-                    LogoutView, PasswordChangeView, RegisterView,
-                    SendVerificationCodeView, UserMeView, UserProfileView,
+                    LogoutView, PasswordChangeView, PublicKeyView,
+                    RegisterView, SendVerificationCodeView, UserMeView,
+                    UserProfileView, UserPublicKeyView, UserSearchView,
                     VerifyPhoneView)
 
 urlpatterns = [
@@ -16,5 +17,8 @@ urlpatterns = [
     path('me/', UserMeView.as_view(), name='me'),
     path('user/', UserProfileView.as_view(), name='user-update'),
     path('user/password/', PasswordChangeView.as_view(), name='password-change'),
+    path('user/public-key/', PublicKeyView.as_view(), name='public-key'),
+    path('users/<uuid:user_id>/public-key/', UserPublicKeyView.as_view(), name='user-public-key'),
+    path('users/search/', UserSearchView.as_view(), name='user-search'),
 ]
 
