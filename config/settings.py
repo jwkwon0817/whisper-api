@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 from datetime import timedelta
 from pathlib import Path
 
+import dj_database_url
 from decouple import config
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -38,6 +39,7 @@ INSTALLED_APPS = [
     'drf_spectacular',
     
     'accounts',
+    'chat',
 ]
 
 REST_FRAMEWORK = {
@@ -80,12 +82,22 @@ TEMPLATES = [
 WSGI_APPLICATION = 'config.wsgi.application'
 
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+# Database 설정
+DATABASE_URL = config('DATABASE_URL', default=None)
+
+if DATABASE_URL:
+    # PostgreSQL (DATABASE_URL 사용)
+    DATABASES = {
+        'default': dj_database_url.parse(DATABASE_URL, conn_max_age=600)
     }
-}
+else:
+    # SQLite (개발 환경용, DATABASE_URL이 없을 때)
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
 
 # Redis 설정 - REDIS_URL을 우선 사용, 없으면 개별 설정으로 조합
 REDIS_URL = config('REDIS_URL', default=None)
@@ -110,15 +122,23 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+# 비밀번호 해싱에 bcrypt 사용
+PASSWORD_HASHERS = [
+    'django.contrib.auth.hashers.BCryptPasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2PasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher',
+    'django.contrib.auth.hashers.Argon2PasswordHasher',
+]
+
 
 # Internationalization
 # https://docs.djangoproject.com/en/5.2/topics/i18n/
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'Asia/Seoul'
 
-USE_I18N = True
+USE_I18N = False
 
 USE_TZ = True
 
@@ -144,6 +164,9 @@ AWS_QUERYSTRING_AUTH = False
 SOLAPI_API_KEY = config('SOLAPI_API_KEY', default='')
 SOLAPI_API_SECRET = config('SOLAPI_API_SECRET', default='')
 SOLAPI_SENDER_NUMBER = config('SOLAPI_SENDER_NUMBER', default='')
+
+# 암호화 설정
+ENCRYPTION_KEY = config('ENCRYPTION_KEY', default=None)
 
 # Media files
 MEDIA_URL = 'media/'

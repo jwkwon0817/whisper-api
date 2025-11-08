@@ -9,7 +9,8 @@ from rest_framework_simplejwt.tokens import RefreshToken, UntypedToken
 from rest_framework_simplejwt.views import (TokenObtainPairView,
                                             TokenRefreshView)
 
-from .serializers import (PasswordChangeSerializer,
+from .serializers import (CustomTokenObtainPairSerializer,
+                          PasswordChangeSerializer,
                           PhoneVerificationSerializer, PhoneVerifySerializer,
                           UserRegistrationSerializer, UserSerializer,
                           UserUpdateSerializer)
@@ -21,11 +22,20 @@ User = get_user_model()
 
 class CustomTokenObtainPairView(TokenObtainPairView):
     """로그인 시 Refresh Token을 Redis에 저장"""
+    serializer_class = CustomTokenObtainPairSerializer
     
     @extend_schema(
         tags=['Auth'],
         summary='로그인',
         description='전화번호와 비밀번호로 로그인하고 JWT 토큰을 발급합니다.',
+        request={
+            'type': 'object',
+            'properties': {
+                'phone_number': {'type': 'string', 'description': '전화번호 (예: 01012345678)'},
+                'password': {'type': 'string', 'format': 'password', 'description': '비밀번호'},
+            },
+            'required': ['phone_number', 'password']
+        },
     )
     def post(self, request, *args, **kwargs):
         response = super().post(request, *args, **kwargs)
@@ -108,6 +118,7 @@ class CustomTokenRefreshView(TokenRefreshView):
 class RegisterView(APIView):
     """회원가입 뷰"""
     permission_classes = [permissions.AllowAny]
+    authentication_classes = []  # 인증 불필요
     parser_classes = [MultiPartParser, FormParser]  # 파일 업로드 지원
     
     @extend_schema(
@@ -302,6 +313,7 @@ class PasswordChangeView(APIView):
 class SendVerificationCodeView(APIView):
     """인증번호 전송 뷰"""
     permission_classes = [permissions.AllowAny]
+    authentication_classes = []  # 인증 불필요
     serializer_class = PhoneVerificationSerializer
     
     @extend_schema(
@@ -331,12 +343,16 @@ class SendVerificationCodeView(APIView):
         
         phone_number = serializer.validated_data['phone_number']
         
-        # 이미 가입된 번호인지 확인
-        if User.objects.filter(phone_number=phone_number).exists():
-            return Response(
-                {'error': '이미 가입된 전화번호입니다.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        # 이미 가입된 번호인지 확인 (암호화된 값 복호화 후 비교)
+        from utils.encryption import EncryptionService
+
+        # 모든 사용자를 가져와서 복호화 후 비교
+        for user in User.objects.all():
+            if EncryptionService.check_phone_number(phone_number, user.phone_number):
+                return Response(
+                    {'error': '이미 가입된 전화번호입니다.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
         
         from django.conf import settings
         limit_seconds = 3 if settings.DEBUG else 60
@@ -382,6 +398,7 @@ class SendVerificationCodeView(APIView):
 class VerifyPhoneView(APIView):
     """인증번호 검증 뷰"""
     permission_classes = [permissions.AllowAny]
+    authentication_classes = []  # 인증 불필요
     serializer_class = PhoneVerifySerializer
     
     @extend_schema(
