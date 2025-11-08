@@ -1,15 +1,16 @@
 from django.urls import path
 
 from .views import (CustomTokenObtainPairView, CustomTokenRefreshView,
-                    LogoutView, PasswordChangeView, PublicKeyView,
-                    RegisterView, SendVerificationCodeView, UserMeView,
-                    UserProfileView, UserPublicKeyView, UserSearchView,
-                    VerifyPhoneView)
+                    DevRegisterView, LogoutView, PasswordChangeView,
+                    PublicKeyView, RegisterView, SendVerificationCodeView,
+                    UserMeView, UserProfileView, UserPublicKeyView,
+                    UserSearchView, VerifyPhoneView)
 
 urlpatterns = [
     path('auth/send-verification-code/', SendVerificationCodeView.as_view(), name='send-verification-code'),
     path('auth/verify-phone/', VerifyPhoneView.as_view(), name='verify-phone'),
     path('auth/register/', RegisterView.as_view(), name='register'),
+    path('auth/register/dev/', DevRegisterView.as_view(), name='dev-register'),
     path('auth/login/', CustomTokenObtainPairView.as_view(), name='login'),
     path('auth/refresh/', CustomTokenRefreshView.as_view(), name='refresh'),
     path('auth/logout/', LogoutView.as_view(), name='logout'),

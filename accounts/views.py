@@ -11,6 +11,7 @@ from rest_framework_simplejwt.views import (TokenObtainPairView,
                                             TokenRefreshView)
 
 from .serializers import (CustomTokenObtainPairSerializer,
+                          DevUserRegistrationSerializer,
                           PasswordChangeSerializer,
                           PhoneVerificationSerializer, PhoneVerifySerializer,
                           PublicKeySerializer, UserRegistrationSerializer,
@@ -642,5 +643,85 @@ class VerifyPhoneView(APIView):
                 'expires_in': 600  # 10분
             },
             status=status.HTTP_200_OK
+        )
+
+
+class DevRegisterView(APIView):
+    """개발 모드용 회원가입 뷰 (전화번호 인증 없이)"""
+    permission_classes = [permissions.AllowAny]
+    authentication_classes = []  # 인증 불필요
+    parser_classes = [MultiPartParser, FormParser]  # 파일 업로드 지원
+    
+    @extend_schema(
+        tags=['Auth'],
+        summary='[개발 모드] 회원가입 (인증 없이)',
+        description='개발 모드에서 전화번호 인증 없이 회원가입합니다. DEBUG=True일 때만 사용 가능합니다.',
+        request={
+            'multipart/form-data': {
+                'type': 'object',
+                'properties': {
+                    'phone_number': {'type': 'string', 'description': '전화번호 (예: 01012345678)'},
+                    'name': {'type': 'string', 'description': '이름'},
+                    'password': {'type': 'string', 'format': 'password', 'description': '비밀번호 (최소 8자)'},
+                    'profile_image': {'type': 'string', 'format': 'binary', 'description': '프로필 이미지 (선택사항)'},
+                    'public_key': {'type': 'string', 'description': 'E2EE 공개키 (PEM 형식, 선택사항)'},
+                },
+                'required': ['phone_number', 'name', 'password']
+            },
+            'application/json': DevUserRegistrationSerializer,
+        },
+        responses={
+            201: OpenApiResponse(
+                description='회원가입 성공',
+                response={
+                    'type': 'object',
+                    'properties': {
+                        'user': {'type': 'object'},
+                        'access': {'type': 'string'},
+                        'refresh': {'type': 'string'},
+                    }
+                }
+            ),
+            400: OpenApiResponse(description='잘못된 요청'),
+            403: OpenApiResponse(description='개발 모드가 아닙니다'),
+        }
+    )
+    def post(self, request):
+        """개발 모드용 회원가입 - 전화번호 인증 없이 사용자 생성 후 JWT 토큰 발급"""
+        from django.conf import settings
+
+        # 개발 모드가 아니면 접근 불가
+        if not settings.DEBUG:
+            return Response(
+                {'error': '이 API는 개발 모드에서만 사용할 수 있습니다.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        serializer = DevUserRegistrationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        
+        # JWT 토큰 생성
+        refresh = RefreshToken.for_user(user)
+        access_token = str(refresh.access_token)
+        refresh_token = str(refresh)
+        
+        # Refresh Token을 Redis에 저장
+        RefreshTokenStorage.save_refresh_token(
+            user_id=user.id,
+            refresh_token=refresh_token,
+            expires_in_days=7
+        )
+        
+        # 사용자 정보 시리얼라이저로 응답
+        user_serializer = UserSerializer(user)
+        
+        return Response(
+            {
+                'user': user_serializer.data,
+                'access': access_token,
+                'refresh': refresh_token,
+            },
+            status=status.HTTP_201_CREATED
         )
 
