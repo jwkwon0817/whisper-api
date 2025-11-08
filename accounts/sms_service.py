@@ -1,7 +1,9 @@
 import random
 from typing import Dict, Optional
-from solapi import SolapiMessageService
+
 from django.conf import settings
+from solapi import SolapiMessageService
+from solapi.model import RequestMessage
 
 
 class SolapiService:
@@ -28,15 +30,23 @@ class SolapiService:
             Dict: 발송 결과
         """
         try:
-            response = self.message_service.send({
-                'to': to,
-                'from': self.sender,
-                'text': message
-            })
+            # RequestMessage 객체 생성
+            request_message = RequestMessage(
+                from_=self.sender,
+                to=to,
+                text=message
+            )
+            
+            response = self.message_service.send(request_message)
             
             return {
                 'success': True,
-                'data': response
+                'data': {
+                    'group_id': response.group_info.group_id,
+                    'total': response.group_info.count.total,
+                    'registered_success': response.group_info.count.registered_success,
+                    'registered_failed': response.group_info.count.registered_failed,
+                }
             }
         except Exception as e:
             return {

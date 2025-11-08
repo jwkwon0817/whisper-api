@@ -113,17 +113,18 @@ class RegisterView(APIView):
     @extend_schema(
         tags=['Auth'],
         summary='회원가입',
-        description='새로운 사용자를 등록하고 JWT 토큰을 발급합니다. profile_image는 선택사항이며 파일로 업로드할 수 있습니다.',
+        description='새로운 사용자를 등록하고 JWT 토큰을 발급합니다. 전화번호 인증 완료 후 받은 verified_token이 필요합니다. profile_image는 선택사항이며 파일로 업로드할 수 있습니다.',
         request={
             'multipart/form-data': {
                 'type': 'object',
                 'properties': {
-                    'phone_number': {'type': 'string'},
-                    'name': {'type': 'string'},
-                    'password': {'type': 'string', 'format': 'password'},
-                    'profile_image': {'type': 'string', 'format': 'binary'},
+                    'phone_number': {'type': 'string', 'description': '전화번호 (예: 01012345678)'},
+                    'name': {'type': 'string', 'description': '이름'},
+                    'password': {'type': 'string', 'format': 'password', 'description': '비밀번호 (최소 8자)'},
+                    'verified_token': {'type': 'string', 'description': '전화번호 인증 완료 토큰 (인증번호 검증 API에서 받은 토큰)'},
+                    'profile_image': {'type': 'string', 'format': 'binary', 'description': '프로필 이미지 (선택사항)'},
                 },
-                'required': ['phone_number', 'name', 'password']
+                'required': ['phone_number', 'name', 'password', 'verified_token']
             },
             'application/json': UserRegistrationSerializer,
         },
@@ -337,10 +338,19 @@ class SendVerificationCodeView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Rate Limit 확인
-        if not PhoneVerificationStorage.check_rate_limit(phone_number, limit_seconds=60):
+        from django.conf import settings
+        limit_seconds = 3 if settings.DEBUG else 60
+        
+        if not PhoneVerificationStorage.check_rate_limit(phone_number, limit_seconds=limit_seconds):
+            # Rate Limit 체크 실패 시 Redis 연결 문제일 수 있으므로 로그 확인
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Rate limit check failed for {phone_number}. This might be a Redis connection issue.")
+            
+            error_message = '요청이 너무 빈번합니다. 3초 후 다시 시도해주세요.' if settings.DEBUG else '요청이 너무 빈번합니다. 1분 후 다시 시도해주세요.'
+            
             return Response(
-                {'error': '요청이 너무 빈번합니다. 1분 후 다시 시도해주세요.'},
+                {'error': error_message},
                 status=status.HTTP_429_TOO_MANY_REQUESTS
             )
         

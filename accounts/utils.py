@@ -244,6 +244,11 @@ class PhoneVerificationStorage:
             redis_client.setex(key, limit_seconds, "1")
             return True  # 허용
         except Exception as e:
+            # Redis 연결 실패 시 개발 환경에서는 Rate Limit 우회
+            import django.conf
+            if django.conf.settings.DEBUG:
+                print(f"Rate Limit 확인 오류 (DEBUG 모드에서 우회): {e}")
+                return True  # 개발 환경에서는 허용
             print(f"Rate Limit 확인 오류: {e}")
-            return False
+            return False  # 프로덕션에서는 안전하게 차단
 
