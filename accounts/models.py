@@ -86,3 +86,35 @@ class User(AbstractBaseUser):
         return self.is_superuser
 
 
+class UserDevice(models.Model):
+    """사용자 기기 관리 (멀티 디바이스 E2EE 지원)"""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='devices', verbose_name='사용자')
+    device_name = models.CharField(max_length=100, verbose_name='기기 이름')  # "iPhone 14", "Chrome on MacBook"
+    device_fingerprint = models.CharField(max_length=255, unique=True, verbose_name='기기 지문')
+    encrypted_private_key = models.TextField(verbose_name='암호화된 개인키 (JSON)')
+    is_primary = models.BooleanField(default=False, verbose_name='주 기기 여부')
+    last_active = models.DateTimeField(auto_now=True, verbose_name='마지막 활동 시간')
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'user_devices'
+        verbose_name = '사용자 기기'
+        verbose_name_plural = '사용자 기기'
+        unique_together = [['user', 'device_fingerprint']]
+        ordering = ['-last_active']
+        indexes = [
+            models.Index(fields=['user', 'is_primary']),
+            models.Index(fields=['device_fingerprint']),
+        ]
+    
+    def __str__(self):
+        return f"{self.user.name}의 {self.device_name}"
+    
+    def save(self, *args, **kwargs):
+        # 첫 번째 기기는 자동으로 주 기기로 설정
+        if not UserDevice.objects.filter(user=self.user).exists():
+            self.is_primary = True
+        super().save(*args, **kwargs)
+
+

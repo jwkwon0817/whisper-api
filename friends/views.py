@@ -8,6 +8,7 @@ from accounts.models import User
 from utils.encryption import EncryptionService
 
 from .models import Friend
+from .response_serializers import MessageResponseSerializer
 from .serializers import (
     FriendRequestSerializer,
     FriendResponseSerializer,
@@ -25,10 +26,7 @@ class FriendRequestView(APIView):
         description='전화번호로 친구 요청을 보냅니다.',
         request=FriendRequestSerializer,
         responses={
-            201: OpenApiResponse(
-                description='친구 요청 성공',
-                response=FriendSerializer
-            ),
+            201: FriendSerializer,
             400: OpenApiResponse(description='잘못된 요청'),
             404: OpenApiResponse(description='사용자를 찾을 수 없음'),
         }
@@ -106,10 +104,7 @@ class FriendListView(APIView):
         summary='친구 목록 조회',
         description='수락된 친구 목록을 조회합니다.',
         responses={
-            200: OpenApiResponse(
-                description='친구 목록',
-                response=FriendSerializer(many=True)
-            ),
+            200: FriendSerializer(many=True),
         }
     )
     def get(self, request):
@@ -135,10 +130,7 @@ class FriendRequestListView(APIView):
         summary='받은 친구 요청 목록 조회',
         description='내가 받은 친구 요청 목록을 조회합니다.',
         responses={
-            200: OpenApiResponse(
-                description='친구 요청 목록',
-                response=FriendSerializer(many=True)
-            ),
+            200: FriendSerializer(many=True),
         }
     )
     def get(self, request):
@@ -165,10 +157,7 @@ class FriendResponseView(APIView):
         description='받은 친구 요청을 수락하거나 거절합니다.',
         request=FriendResponseSerializer,
         responses={
-            200: OpenApiResponse(
-                description='응답 성공',
-                response=FriendSerializer
-            ),
+            200: FriendSerializer,
             404: OpenApiResponse(description='친구 요청을 찾을 수 없음'),
         }
     )
@@ -208,15 +197,7 @@ class FriendDeleteView(APIView):
         summary='친구 삭제',
         description='친구 관계를 삭제합니다.',
         responses={
-            200: OpenApiResponse(
-                description='삭제 성공',
-                response={
-                    'type': 'object',
-                    'properties': {
-                        'message': {'type': 'string'}
-                    }
-                }
-            ),
+            200: MessageResponseSerializer,
             404: OpenApiResponse(description='친구 관계를 찾을 수 없음'),
         }
     )

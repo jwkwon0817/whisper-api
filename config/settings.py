@@ -23,10 +23,11 @@ SECRET_KEY = config('SECRET_KEY', default='django-insecure-ejvjq%&x23d@9h9@$v4f^
 
 DEBUG = config('DEBUG', default=True, cast=bool)
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['*']
 
 
 INSTALLED_APPS = [
+    'daphne',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -34,6 +35,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     
+    'channels',
     'rest_framework',
     'rest_framework_simplejwt',
     'drf_spectacular',
@@ -62,6 +64,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'utils.logging_middleware.RequestResponseLoggingMiddleware',  # DEBUG 모드 요청/응답 로깅
 ]
 
 ROOT_URLCONF = 'config.urls'
@@ -82,6 +85,17 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'config.wsgi.application'
+ASGI_APPLICATION = 'config.asgi.application'
+
+# Channels Layer 설정 (WebSocket을 위한 Redis 백엔드)
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            "hosts": [config('REDIS_URL', default=None)] if config('REDIS_URL', default=None) else [('127.0.0.1', 6379)],
+        },
+    },
+}
 
 
 # Database 설정
@@ -222,5 +236,44 @@ SPECTACULAR_SETTINGS = {
         'displayRequestDuration': True,
         'filter': True,
         'tryItOutEnabled': True,
+    },
+}
+
+# 로깅 설정 (DEBUG 모드에서 요청/응답 로깅)
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {message}',
+            'style': '{',
+        },
+        'simple': {
+            'format': '{levelname} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'simple',
+        },
+    },
+    'loggers': {
+        'api': {
+            'handlers': ['console'],
+            'level': 'DEBUG' if DEBUG else 'INFO',
+            'propagate': False,
+        },
+        'django': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'channels': {
+            'handlers': ['console'],
+            'level': 'DEBUG' if DEBUG else 'INFO',
+            'propagate': False,
+        },
     },
 }

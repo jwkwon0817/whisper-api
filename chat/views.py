@@ -24,6 +24,13 @@ from .serializers import (ChatFolderCreateSerializer,
                           GroupChatInvitationSerializer,
                           MessageCreateSerializer, MessageReadSerializer,
                           MessageSerializer)
+from .response_serializers import (
+    MessageListResponseSerializer,
+    MessageReadResponseSerializer,
+    ChatRoomLeaveResponseSerializer,
+    ChatRoomMemberAddResponseSerializer,
+    ChatRoomMemberRemoveResponseSerializer,
+)
 
 
 class ChatRoomListView(APIView):
@@ -36,10 +43,7 @@ class ChatRoomListView(APIView):
         description='사용자가 참여한 모든 채팅방 목록을 조회합니다.',
         operation_id='chat_rooms_list',
         responses={
-            200: OpenApiResponse(
-                description='채팅방 목록',
-                response=ChatRoomSerializer(many=True)
-            ),
+            200: ChatRoomSerializer(many=True),
         }
     )
     def get(self, request):
@@ -68,14 +72,8 @@ class DirectChatCreateView(APIView):
         description='1:1 채팅방을 생성합니다. 같은 두 사용자 조합은 하나만 존재할 수 있습니다.',
         request=DirectChatCreateSerializer,
         responses={
-            200: OpenApiResponse(
-                description='기존 채팅방 반환',
-                response=ChatRoomSerializer
-            ),
-            201: OpenApiResponse(
-                description='새 채팅방 생성 성공',
-                response=ChatRoomSerializer
-            ),
+            200: ChatRoomSerializer,
+            201: ChatRoomSerializer,
             400: OpenApiResponse(description='잘못된 요청'),
         }
     )
@@ -152,10 +150,7 @@ class GroupChatCreateView(APIView):
         description='새로운 그룹 채팅방을 생성합니다.',
         request=GroupChatCreateSerializer,
         responses={
-            201: OpenApiResponse(
-                description='그룹 채팅방 생성 성공',
-                response=ChatRoomSerializer
-            ),
+            201: ChatRoomSerializer,
             400: OpenApiResponse(description='잘못된 요청'),
         }
     )
@@ -207,10 +202,7 @@ class ChatRoomDetailView(APIView):
         description='채팅방의 상세 정보를 조회합니다.',
         operation_id='chat_rooms_detail',
         responses={
-            200: OpenApiResponse(
-                description='채팅방 상세 정보',
-                response=ChatRoomSerializer
-            ),
+            200: ChatRoomSerializer,
             404: OpenApiResponse(description='채팅방을 찾을 수 없음'),
         }
     )
@@ -242,10 +234,7 @@ class ChatRoomDetailView(APIView):
         description='그룹 채팅방의 이름과 설명을 수정합니다.',
         request=ChatRoomUpdateSerializer,
         responses={
-            200: OpenApiResponse(
-                description='채팅방 정보 수정 성공',
-                response=ChatRoomSerializer
-            ),
+            200: ChatRoomSerializer,
             403: OpenApiResponse(description='권한 없음'),
             404: OpenApiResponse(description='채팅방을 찾을 수 없음'),
         }
@@ -317,10 +306,7 @@ class MessageListView(APIView):
             ),
         ],
         responses={
-            200: OpenApiResponse(
-                description='메시지 목록',
-                response=MessageSerializer(many=True)
-            ),
+            200: MessageListResponseSerializer,
             404: OpenApiResponse(description='채팅방을 찾을 수 없음'),
         }
     )
@@ -365,10 +351,7 @@ class MessageListView(APIView):
         description='채팅방에 메시지를 전송합니다.',
         request=MessageCreateSerializer,
         responses={
-            201: OpenApiResponse(
-                description='메시지 전송 성공',
-                response=MessageSerializer
-            ),
+            201: MessageSerializer,
             400: OpenApiResponse(description='잘못된 요청'),
             404: OpenApiResponse(description='채팅방을 찾을 수 없음'),
         }
@@ -414,16 +397,7 @@ class MessageReadView(APIView):
         description='메시지를 읽음 처리합니다. 여러 메시지를 한 번에 읽음 처리할 수 있습니다.',
         request=MessageReadSerializer,
         responses={
-            200: OpenApiResponse(
-                description='읽음 처리 성공',
-                response={
-                    'type': 'object',
-                    'properties': {
-                        'message': {'type': 'string'},
-                        'read_count': {'type': 'integer'}
-                    }
-                }
-            ),
+            200: MessageReadResponseSerializer,
             404: OpenApiResponse(description='채팅방을 찾을 수 없음'),
         }
     )
@@ -480,15 +454,7 @@ class ChatRoomLeaveView(APIView):
         description='채팅방을 나갑니다. 1:1 채팅의 경우 채팅방이 삭제되고, 그룹 채팅의 경우 본인만 나갑니다.',
         request=None,
         responses={
-            200: OpenApiResponse(
-                description='나가기 성공',
-                response={
-                    'type': 'object',
-                    'properties': {
-                        'message': {'type': 'string'}
-                    }
-                }
-            ),
+            200: ChatRoomLeaveResponseSerializer,
             404: OpenApiResponse(description='채팅방을 찾을 수 없음'),
         }
     )
@@ -561,10 +527,7 @@ class ChatFolderListView(APIView):
         description='사용자의 채팅방 폴더 목록을 조회합니다.',
         operation_id='chat_folders_list',
         responses={
-            200: OpenApiResponse(
-                description='폴더 목록',
-                response=ChatFolderSerializer(many=True)
-            ),
+            200: ChatFolderSerializer(many=True),
         }
     )
     def get(self, request):
@@ -579,10 +542,7 @@ class ChatFolderListView(APIView):
         description='새로운 채팅방 폴더를 생성합니다.',
         request=ChatFolderCreateSerializer,
         responses={
-            201: OpenApiResponse(
-                description='폴더 생성 성공',
-                response=ChatFolderSerializer
-            ),
+            201: ChatFolderSerializer,
             400: OpenApiResponse(description='잘못된 요청'),
         }
     )
@@ -617,10 +577,7 @@ class ChatFolderDetailView(APIView):
         description='폴더의 상세 정보와 포함된 채팅방 목록을 조회합니다.',
         operation_id='chat_folders_detail',
         responses={
-            200: OpenApiResponse(
-                description='폴더 상세 정보',
-                response=ChatFolderRoomSerializer(many=True)
-            ),
+            200: ChatFolderRoomSerializer(many=True),
             404: OpenApiResponse(description='폴더를 찾을 수 없음'),
         }
     )
@@ -644,10 +601,7 @@ class ChatFolderDetailView(APIView):
         description='폴더의 이름과 색상을 수정합니다.',
         request=ChatFolderUpdateSerializer,
         responses={
-            200: OpenApiResponse(
-                description='폴더 수정 성공',
-                response=ChatFolderSerializer
-            ),
+            200: ChatFolderSerializer,
             404: OpenApiResponse(description='폴더를 찾을 수 없음'),
         }
     )
@@ -709,10 +663,7 @@ class ChatFolderRoomView(APIView):
         operation_id='chat_folders_rooms_add',
         request=ChatFolderRoomAddSerializer,
         responses={
-            201: OpenApiResponse(
-                description='채팅방 추가 성공',
-                response=ChatFolderRoomSerializer
-            ),
+            201: ChatFolderRoomSerializer,
             400: OpenApiResponse(description='잘못된 요청'),
             404: OpenApiResponse(description='폴더 또는 채팅방을 찾을 수 없음'),
         }
@@ -809,36 +760,7 @@ class ChatRoomMemberView(APIView):
         operation_id='chat_rooms_members_add',
         request=ChatRoomMemberAddSerializer,
         responses={
-            200: OpenApiResponse(
-                description='멤버 추가 성공',
-                response={
-                    'type': 'object',
-                    'properties': {
-                        'message': {'type': 'string'},
-                        'added_members': {
-                            'type': 'array',
-                            'items': {
-                                'type': 'object',
-                                'properties': {
-                                    'id': {'type': 'string', 'format': 'uuid'},
-                                    'user': {
-                                        'type': 'object',
-                                        'properties': {
-                                            'id': {'type': 'string', 'format': 'uuid'},
-                                            'name': {'type': 'string'},
-                                            'profile_image': {'type': 'string', 'nullable': True}
-                                        }
-                                    },
-                                    'role': {'type': 'string'},
-                                    'nickname': {'type': 'string', 'nullable': True},
-                                    'joined_at': {'type': 'string', 'format': 'date-time'},
-                                    'last_read_at': {'type': 'string', 'format': 'date-time', 'nullable': True}
-                                }
-                            }
-                        }
-                    }
-                }
-            ),
+            200: ChatRoomMemberAddResponseSerializer,
             403: OpenApiResponse(description='권한 없음'),
             404: OpenApiResponse(description='채팅방을 찾을 수 없음'),
         }
@@ -906,15 +828,7 @@ class ChatRoomMemberView(APIView):
         operation_id='chat_rooms_members_remove',
         request=None,
         responses={
-            200: OpenApiResponse(
-                description='멤버 제거 성공',
-                response={
-                    'type': 'object',
-                    'properties': {
-                        'message': {'type': 'string'}
-                    }
-                }
-            ),
+            200: ChatRoomMemberRemoveResponseSerializer,
             403: OpenApiResponse(description='권한 없음'),
             404: OpenApiResponse(description='채팅방 또는 멤버를 찾을 수 없음'),
         }
@@ -1001,10 +915,7 @@ class GroupChatInvitationView(APIView):
         description='친구에게 그룹챗 초대를 보냅니다. 친구만 초대할 수 있습니다.',
         request=GroupChatInvitationCreateSerializer,
         responses={
-            201: OpenApiResponse(
-                description='초대 성공',
-                response=GroupChatInvitationSerializer
-            ),
+            201: GroupChatInvitationSerializer,
             400: OpenApiResponse(description='잘못된 요청'),
             403: OpenApiResponse(description='권한 없음'),
             404: OpenApiResponse(description='채팅방 또는 사용자를 찾을 수 없음'),
@@ -1111,10 +1022,7 @@ class GroupChatInvitationListView(APIView):
         summary='받은 그룹챗 초대 목록 조회',
         description='내가 받은 그룹챗 초대 목록을 조회합니다.',
         responses={
-            200: OpenApiResponse(
-                description='초대 목록',
-                response=GroupChatInvitationSerializer(many=True)
-            ),
+            200: GroupChatInvitationSerializer(many=True),
         }
     )
     def get(self, request):
@@ -1141,10 +1049,7 @@ class GroupChatInvitationResponseView(APIView):
         description='받은 그룹챗 초대를 수락하거나 거절합니다. 수락 시 채팅방에 자동으로 추가됩니다.',
         request=GroupChatInvitationResponseSerializer,
         responses={
-            200: OpenApiResponse(
-                description='응답 성공',
-                response=GroupChatInvitationSerializer
-            ),
+            200: GroupChatInvitationSerializer,
             404: OpenApiResponse(description='초대를 찾을 수 없음'),
         }
     )

@@ -1,21 +1,41 @@
 from django.contrib.auth import get_user_model
-from drf_spectacular.utils import (OpenApiParameter, OpenApiResponse,
-                                   extend_schema)
+from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import permissions, status
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.tokens import RefreshToken, UntypedToken
-from rest_framework_simplejwt.views import (TokenObtainPairView,
-                                            TokenRefreshView)
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
-from .serializers import (CustomTokenObtainPairSerializer,
-                          DevUserRegistrationSerializer,
-                          PasswordChangeSerializer,
-                          PhoneVerificationSerializer, PhoneVerifySerializer,
-                          PublicKeySerializer, UserRegistrationSerializer,
-                          UserSerializer, UserUpdateSerializer)
+from .models import UserDevice
+from .response_serializers import (
+    DevicePrivateKeyResponseSerializer,
+    MessageResponseSerializer,
+    PhoneVerifyResponseSerializer,
+    PublicKeyResponseSerializer,
+    TokenPairResponseSerializer,
+    TokenResponseSerializer,
+    UserDevicesPublicResponseSerializer,
+    UserPublicKeyResponseSerializer,
+    UserSearchResponseSerializer,
+    VerificationCodeResponseSerializer,
+)
+from .serializers import (
+    CustomTokenObtainPairSerializer,
+    DevUserRegistrationSerializer,
+    PasswordChangeSerializer,
+    PhoneVerificationSerializer,
+    PhoneVerifySerializer,
+    PublicKeySerializer,
+    UserDeleteSerializer,
+    UserDeviceCreateSerializer,
+    UserDevicePrivateKeySerializer,
+    UserDeviceSerializer,
+    UserRegistrationSerializer,
+    UserSerializer,
+    UserUpdateSerializer,
+)
 from .sms_service import SolapiService
 from .utils import PhoneVerificationStorage, RefreshTokenStorage
 
@@ -29,8 +49,21 @@ class CustomTokenObtainPairView(TokenObtainPairView):
     @extend_schema(
         tags=['Auth'],
         summary='로그인',
-        description='전화번호와 비밀번호로 로그인하고 JWT 토큰을 발급합니다.',
+        description='''
+        전화번호와 비밀번호로 로그인하고 JWT 토큰을 발급합니다.
+        
+        선택 항목:
+        - device_fingerprint: 기기 지문 (제공 시 기존 기기 확인 및 last_active 업데이트)
+        
+        응답:
+        - device_registered: 현재 기기가 등록되어 있는지 여부
+        - device_id: 등록된 기기 ID (없으면 null)
+        ''',
         request=CustomTokenObtainPairSerializer,
+        responses={
+            200: TokenPairResponseSerializer,
+            400: OpenApiResponse(description='로그인 실패 (전화번호 또는 비밀번호 오류)'),
+        }
     )
     def post(self, request, *args, **kwargs):
         response = super().post(request, *args, **kwargs)
@@ -63,6 +96,10 @@ class CustomTokenRefreshView(TokenRefreshView):
         tags=['Auth'],
         summary='Token Refresh',
         description='Refresh Token을 사용하여 새로운 Access Token을 발급합니다.',
+        responses={
+            200: TokenPairResponseSerializer,
+            401: OpenApiResponse(description='토큰이 유효하지 않거나 만료됨'),
+        }
     )
     def post(self, request, *args, **kwargs):
         refresh_token = request.data.get('refresh')
@@ -119,7 +156,23 @@ class RegisterView(APIView):
     @extend_schema(
         tags=['Auth'],
         summary='회원가입',
-        description='새로운 사용자를 등록하고 JWT 토큰을 발급합니다. 전화번호 인증 완료 후 받은 verified_token이 필요합니다. profile_image는 선택사항이며 파일로 업로드할 수 있습니다.',
+        description='''
+        새로운 사용자를 등록하고 JWT 토큰을 발급합니다.
+        
+        필수 항목:
+        - phone_number: 전화번호 (인증 완료된 번호)
+        - name: 이름
+        - password: 비밀번호 (최소 8자)
+        - verified_token: 전화번호 인증 완료 토큰
+        
+        선택 항목 (E2EE + 멀티 디바이스):
+        - public_key: E2EE 공개키 (PEM 형식)
+        - device_name: 기기 이름 (예: iPhone 14, Chrome on Mac)
+        - device_fingerprint: 기기 고유 식별자
+        - encrypted_private_key: 비밀번호로 암호화된 개인키 (JSON 문자열)
+        
+        ⚠️ 기기 정보는 3개 모두 제공하거나 모두 제공하지 않아야 합니다.
+        ''',
         request={
             'multipart/form-data': {
                 'type': 'object',
@@ -127,26 +180,19 @@ class RegisterView(APIView):
                     'phone_number': {'type': 'string', 'description': '전화번호 (예: 01012345678)'},
                     'name': {'type': 'string', 'description': '이름'},
                     'password': {'type': 'string', 'format': 'password', 'description': '비밀번호 (최소 8자)'},
-                    'verified_token': {'type': 'string', 'description': '전화번호 인증 완료 토큰 (인증번호 검증 API에서 받은 토큰)'},
+                    'verified_token': {'type': 'string', 'description': '전화번호 인증 완료 토큰'},
                     'profile_image': {'type': 'string', 'format': 'binary', 'description': '프로필 이미지 (선택사항)'},
                     'public_key': {'type': 'string', 'description': 'E2EE 공개키 (PEM 형식, 선택사항)'},
+                    'device_name': {'type': 'string', 'description': '기기 이름 (선택사항, 예: iPhone 14)'},
+                    'device_fingerprint': {'type': 'string', 'description': '기기 지문 (선택사항, 고유 식별자)'},
+                    'encrypted_private_key': {'type': 'string', 'description': '암호화된 개인키 (선택사항, JSON 문자열)'},
                 },
                 'required': ['phone_number', 'name', 'password', 'verified_token']
             },
             'application/json': UserRegistrationSerializer,
         },
         responses={
-            201: OpenApiResponse(
-                description='회원가입 성공',
-                response={
-                    'type': 'object',
-                    'properties': {
-                        'user': {'type': 'object'},
-                        'access': {'type': 'string'},
-                        'refresh': {'type': 'string'},
-                    }
-                }
-            ),
+            201: TokenResponseSerializer,
             400: OpenApiResponse(description='잘못된 요청'),
         }
     )
@@ -199,15 +245,7 @@ class LogoutView(APIView):
             }
         },
         responses={
-            200: OpenApiResponse(
-                description='로그아웃 성공',
-                response={
-                    'type': 'object',
-                    'properties': {
-                        'message': {'type': 'string'}
-                    }
-                }
-            )
+            200: MessageResponseSerializer,
         }
     )
     def post(self, request):
@@ -238,10 +276,7 @@ class UserProfileView(APIView):
         description='프로필 사진과 이름을 변경합니다.',
         request=UserUpdateSerializer,
         responses={
-            200: OpenApiResponse(
-                description='정보 변경 성공',
-                response=UserUpdateSerializer
-            ),
+            200: UserSerializer,
         }
     )
     def patch(self, request):
@@ -262,10 +297,7 @@ class UserMeView(APIView):
         summary='내 정보 조회',
         description='로그인한 사용자의 정보를 조회합니다.',
         responses={
-            200: OpenApiResponse(
-                description='내 정보',
-                response=UserSerializer
-            ),
+            200: UserSerializer,
         }
     )
     def get(self, request):
@@ -285,15 +317,7 @@ class PasswordChangeView(APIView):
         description='사용자의 비밀번호를 변경합니다. 변경 후 모든 기기에서 로그아웃됩니다.',
         request=PasswordChangeSerializer,
         responses={
-            200: OpenApiResponse(
-                description='비밀번호 변경 성공',
-                response={
-                    'type': 'object',
-                    'properties': {
-                        'message': {'type': 'string'}
-                    }
-                }
-            ),
+            200: MessageResponseSerializer,
             400: OpenApiResponse(description='잘못된 요청'),
         }
     )
@@ -323,16 +347,7 @@ class PublicKeyView(APIView):
         description='E2EE 공개키를 등록하거나 수정합니다.',
         request=PublicKeySerializer,
         responses={
-            200: OpenApiResponse(
-                description='공개키 등록 성공',
-                response={
-                    'type': 'object',
-                    'properties': {
-                        'message': {'type': 'string'},
-                        'public_key': {'type': 'string'}
-                    }
-                }
-            ),
+            200: PublicKeyResponseSerializer,
             400: OpenApiResponse(description='잘못된 요청'),
         }
     )
@@ -360,17 +375,7 @@ class UserPublicKeyView(APIView):
         summary='사용자 공개키 조회',
         description='특정 사용자의 공개키를 조회합니다. (1:1 채팅 생성 시 필요)',
         responses={
-            200: OpenApiResponse(
-                description='공개키 조회 성공',
-                response={
-                    'type': 'object',
-                    'properties': {
-                        'user_id': {'type': 'string', 'format': 'uuid'},
-                        'name': {'type': 'string'},
-                        'public_key': {'type': 'string', 'nullable': True}
-                    }
-                }
-            ),
+            200: UserPublicKeyResponseSerializer,
             404: OpenApiResponse(description='사용자를 찾을 수 없음'),
         }
     )
@@ -417,27 +422,7 @@ class UserSearchView(APIView):
             ),
         ],
         responses={
-            200: OpenApiResponse(
-                description='검색 성공',
-                response={
-                    'type': 'object',
-                    'properties': {
-                        'results': {
-                            'type': 'array',
-                            'items': {
-                                'type': 'object',
-                                'properties': {
-                                    'id': {'type': 'string', 'format': 'uuid'},
-                                    'name': {'type': 'string'},
-                                    'profile_image': {'type': 'string', 'nullable': True},
-                                    'has_public_key': {'type': 'boolean'}
-                                }
-                            }
-                        },
-                        'count': {'type': 'integer'}
-                    }
-                }
-            ),
+            200: UserSearchResponseSerializer,
         }
     )
     def get(self, request):
@@ -489,15 +474,7 @@ class SendVerificationCodeView(APIView):
         description='전화번호로 인증번호를 SMS로 전송합니다.',
         request=PhoneVerificationSerializer,
         responses={
-            200: OpenApiResponse(
-                description='인증번호 전송 성공',
-                response={
-                    'type': 'object',
-                    'properties': {
-                        'message': {'type': 'string'}
-                    }
-                }
-            ),
+            200: VerificationCodeResponseSerializer,
             400: OpenApiResponse(description='잘못된 요청'),
             429: OpenApiResponse(description='요청 제한 초과'),
             500: OpenApiResponse(description='SMS 발송 실패'),
@@ -574,17 +551,7 @@ class VerifyPhoneView(APIView):
         description='인증번호를 검증하고 인증 완료 토큰을 발급합니다.',
         request=PhoneVerifySerializer,
         responses={
-            200: OpenApiResponse(
-                description='인증 성공',
-                response={
-                    'type': 'object',
-                    'properties': {
-                        'message': {'type': 'string'},
-                        'verified_token': {'type': 'string'},
-                        'expires_in': {'type': 'integer'}
-                    }
-                }
-            ),
+            200: PhoneVerifyResponseSerializer,
             400: OpenApiResponse(description='인증번호 불일치 또는 만료'),
             429: OpenApiResponse(description='시도 횟수 초과'),
         }
@@ -655,7 +622,22 @@ class DevRegisterView(APIView):
     @extend_schema(
         tags=['Auth'],
         summary='[개발 모드] 회원가입 (인증 없이)',
-        description='개발 모드에서 전화번호 인증 없이 회원가입합니다. DEBUG=True일 때만 사용 가능합니다.',
+        description='''
+        개발 모드에서 전화번호 인증 없이 회원가입합니다. DEBUG=True일 때만 사용 가능합니다.
+        
+        필수 항목:
+        - phone_number: 전화번호
+        - name: 이름
+        - password: 비밀번호 (최소 8자)
+        
+        선택 항목 (E2EE + 멀티 디바이스):
+        - public_key: E2EE 공개키 (PEM 형식)
+        - device_name: 기기 이름 (예: iPhone 14, Chrome on Mac)
+        - device_fingerprint: 기기 고유 식별자
+        - encrypted_private_key: 비밀번호로 암호화된 개인키 (JSON 문자열)
+        
+        ⚠️ 기기 정보는 3개 모두 제공하거나 모두 제공하지 않아야 합니다.
+        ''',
         request={
             'multipart/form-data': {
                 'type': 'object',
@@ -665,23 +647,16 @@ class DevRegisterView(APIView):
                     'password': {'type': 'string', 'format': 'password', 'description': '비밀번호 (최소 8자)'},
                     'profile_image': {'type': 'string', 'format': 'binary', 'description': '프로필 이미지 (선택사항)'},
                     'public_key': {'type': 'string', 'description': 'E2EE 공개키 (PEM 형식, 선택사항)'},
+                    'device_name': {'type': 'string', 'description': '기기 이름 (선택사항, 예: iPhone 14)'},
+                    'device_fingerprint': {'type': 'string', 'description': '기기 지문 (선택사항)'},
+                    'encrypted_private_key': {'type': 'string', 'description': '암호화된 개인키 (선택사항, JSON)'},
                 },
                 'required': ['phone_number', 'name', 'password']
             },
             'application/json': DevUserRegistrationSerializer,
         },
         responses={
-            201: OpenApiResponse(
-                description='회원가입 성공',
-                response={
-                    'type': 'object',
-                    'properties': {
-                        'user': {'type': 'object'},
-                        'access': {'type': 'string'},
-                        'refresh': {'type': 'string'},
-                    }
-                }
-            ),
+            201: TokenResponseSerializer,
             400: OpenApiResponse(description='잘못된 요청'),
             403: OpenApiResponse(description='개발 모드가 아닙니다'),
         }
@@ -723,5 +698,233 @@ class DevRegisterView(APIView):
                 'refresh': refresh_token,
             },
             status=status.HTTP_201_CREATED
+        )
+
+
+class DeviceListView(APIView):
+    """기기 목록 조회 및 등록"""
+    permission_classes = [permissions.IsAuthenticated]
+    
+    @extend_schema(
+        tags=['Device'],
+        summary='내 기기 목록 조회',
+        description='현재 사용자의 등록된 모든 기기 목록을 조회합니다.',
+        responses={
+            200: UserDeviceSerializer(many=True),
+        }
+    )
+    def get(self, request):
+        """내 기기 목록 조회"""
+        devices = UserDevice.objects.filter(user=request.user).order_by('-last_active')
+        serializer = UserDeviceSerializer(devices, many=True)
+        return Response(serializer.data)
+    
+    @extend_schema(
+        tags=['Device'],
+        summary='새 기기 등록',
+        description='새로운 기기를 등록합니다. 기기 지문과 암호화된 개인키를 저장합니다.',
+        request=UserDeviceCreateSerializer,
+        responses={
+            201: OpenApiResponse(
+                description='기기 등록 성공',
+                response=UserDeviceSerializer
+            ),
+            400: OpenApiResponse(description='잘못된 요청 (중복된 기기 등록 등)'),
+        }
+    )
+    def post(self, request):
+        """새 기기 등록"""
+        serializer = UserDeviceCreateSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        device = serializer.save()
+        
+        result_serializer = UserDeviceSerializer(device)
+        return Response(result_serializer.data, status=status.HTTP_201_CREATED)
+
+
+class DeviceDetailView(APIView):
+    """기기 상세 조회 및 삭제"""
+    permission_classes = [permissions.IsAuthenticated]
+    
+    @extend_schema(
+        tags=['Device'],
+        summary='기기 상세 조회',
+        description='특정 기기의 상세 정보를 조회합니다.',
+        responses={
+            200: UserDeviceSerializer,
+            404: OpenApiResponse(description='기기를 찾을 수 없음'),
+        }
+    )
+    def get(self, request, device_id):
+        """기기 상세 조회"""
+        try:
+            device = UserDevice.objects.get(id=device_id, user=request.user)
+        except UserDevice.DoesNotExist:
+            return Response(
+                {'error': '기기를 찾을 수 없습니다.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        serializer = UserDeviceSerializer(device)
+        return Response(serializer.data)
+    
+    @extend_schema(
+        tags=['Device'],
+        summary='기기 삭제',
+        description='기기를 목록에서 제거합니다. 해당 기기는 더 이상 메시지를 복호화할 수 없게 됩니다.',
+        responses={
+            204: OpenApiResponse(description='삭제 성공'),
+            404: OpenApiResponse(description='기기를 찾을 수 없음'),
+        }
+    )
+    def delete(self, request, device_id):
+        """기기 삭제"""
+        try:
+            device = UserDevice.objects.get(id=device_id, user=request.user)
+        except UserDevice.DoesNotExist:
+            return Response(
+                {'error': '기기를 찾을 수 없습니다.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        device.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class DevicePrivateKeyView(APIView):
+    """기기의 암호화된 개인키 조회 (키 동기화용)"""
+    permission_classes = [permissions.IsAuthenticated]
+    
+    @extend_schema(
+        tags=['Device'],
+        summary='기기의 암호화된 개인키 가져오기',
+        description='''
+        새 기기에서 로그인 시 기존 기기의 암호화된 개인키를 가져옵니다.
+        보안: 
+        - 주 기기(is_primary)는 항상 키를 가져올 수 있습니다.
+        - 그 외 기기는 최근 24시간 이내에 활성화된 경우만 허용됩니다.
+        ''',
+        responses={
+            200: DevicePrivateKeyResponseSerializer,
+            403: OpenApiResponse(description='보안상 접근 불가 (비활성 기기)'),
+            404: OpenApiResponse(description='기기를 찾을 수 없음'),
+        }
+    )
+    def get(self, request, device_id):
+        """특정 기기의 암호화된 개인키 가져오기"""
+        from datetime import timedelta
+
+        from django.utils import timezone
+        
+        try:
+            device = UserDevice.objects.get(id=device_id, user=request.user)
+        except UserDevice.DoesNotExist:
+            return Response(
+                {'error': '기기를 찾을 수 없습니다.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # 보안: 주 기기는 항상 허용, 그 외는 최근 활동이 있는 기기만 허용 (24시간 이내)
+        if not device.is_primary:
+            time_threshold = timezone.now() - timedelta(hours=24)
+            if device.last_active < time_threshold:
+                return Response(
+                    {'error': '보안상 최근에 활성화된 기기의 키만 가져올 수 있습니다. 해당 기기에서 다시 로그인해주세요.'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        
+        return Response({
+            'device_id': str(device.id),
+            'device_name': device.device_name,
+            'encrypted_private_key': device.encrypted_private_key
+        })
+
+
+class UserDevicesPublicView(APIView):
+    """사용자의 기기 공개 정보 조회 (다른 사용자가 조회)"""
+    permission_classes = [permissions.IsAuthenticated]
+    
+    @extend_schema(
+        tags=['Device'],
+        summary='사용자의 기기 목록 조회 (공개 정보만)',
+        description='다른 사용자의 기기 목록을 조회합니다. 개인키 정보는 포함되지 않습니다.',
+        responses={
+            200: UserDevicesPublicResponseSerializer,
+            404: OpenApiResponse(description='사용자를 찾을 수 없음'),
+        }
+    )
+    def get(self, request, user_id):
+        """사용자의 기기 목록 조회 (공개 정보만)"""
+        try:
+            target_user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return Response(
+                {'error': '사용자를 찾을 수 없습니다.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        devices = UserDevice.objects.filter(user=target_user).order_by('-is_primary', '-last_active')
+        
+        return Response({
+            'user_id': str(target_user.id),
+            'name': target_user.name,
+            'device_count': devices.count(),
+            'devices': [
+                {
+                    'id': str(device.id),
+                    'device_name': device.device_name,
+                    'is_primary': device.is_primary,
+                }
+                for device in devices
+            ]
+        })
+
+
+class UserDeleteView(APIView):
+    """회원 탈퇴"""
+    permission_classes = [permissions.IsAuthenticated]
+    
+    @extend_schema(
+        tags=['User'],
+        summary='회원 탈퇴',
+        description='''
+        회원 탈퇴를 진행합니다.
+        
+        주의사항:
+        - 모든 데이터가 영구적으로 삭제됩니다 (채팅, 친구, 기기 등)
+        - 삭제된 데이터는 복구할 수 없습니다
+        - 비밀번호 확인과 "회원탈퇴" 문구 입력이 필요합니다
+        ''',
+        request=UserDeleteSerializer,
+        responses={
+            200: MessageResponseSerializer,
+            400: OpenApiResponse(description='잘못된 요청 (비밀번호 불일치 등)'),
+        }
+    )
+    def delete(self, request):
+        """회원 탈퇴 처리"""
+        serializer = UserDeleteSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        
+        user = request.user
+        user_id = user.id
+        
+        # 1. 모든 Refresh Token 삭제 (모든 기기에서 로그아웃)
+        RefreshTokenStorage.delete_all_user_tokens(user_id)
+        
+        # 2. 사용자 삭제 (CASCADE로 연관 데이터 자동 삭제)
+        # - UserDevice (기기)
+        # - ChatRoomMember (채팅방 멤버십)
+        # - Message (메시지 - sender가 null로 변경됨)
+        # - Friend (친구 관계)
+        # - ChatFolder (채팅 폴더)
+        # - GroupChatInvitation (그룹챗 초대)
+        user.delete()
+        
+        return Response(
+            {
+                'message': '회원 탈퇴가 완료되었습니다. 그동안 이용해주셔서 감사합니다.'
+            },
+            status=status.HTTP_200_OK
         )
 
