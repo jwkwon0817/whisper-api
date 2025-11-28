@@ -1,4 +1,6 @@
 import json
+from typing import Optional, Tuple
+
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.contrib.auth import get_user_model
@@ -7,13 +9,90 @@ from django.core.serializers.json import DjangoJSONEncoder
 from rest_framework_simplejwt.tokens import AccessToken
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 
+from config.constants import (
+    WEBSOCKET_ERROR_NO_TOKEN,
+    WEBSOCKET_ERROR_USER_NOT_FOUND,
+    WEBSOCKET_ERROR_INVALID_TOKEN,
+    WEBSOCKET_ERROR_NOT_MEMBER,
+)
+
 from .models import ChatRoom, ChatRoomMember, Message
 from .serializers import MessageSerializer
 
 User = get_user_model()
 
 
-class ChatConsumer(AsyncWebsocketConsumer):
+# MARK: - Base Auth Consumer
+
+class BaseAuthConsumer(AsyncWebsocketConsumer):
+    """
+    JWT 인증 기능을 제공하는 베이스 WebSocket Consumer
+    
+    공통 기능:
+    - query_string에서 토큰 파싱
+    - JWT 토큰 검증
+    - 사용자 조회
+    
+    Error Codes:
+    - WEBSOCKET_ERROR_NO_TOKEN (4001): 토큰 없음
+    - WEBSOCKET_ERROR_USER_NOT_FOUND (4002): 사용자 없음
+    - WEBSOCKET_ERROR_INVALID_TOKEN (4003): 유효하지 않은 토큰
+    """
+    
+    user = None  # 인증된 사용자
+    
+    def parse_token_from_query_string(self) -> Optional[str]:
+        """query_string에서 JWT 토큰을 파싱합니다.
+        
+        Returns:
+            Optional[str]: 토큰 문자열 또는 None
+        """
+        query_string = self.scope.get('query_string', b'').decode()
+        query_params = dict(
+            param.split('=') for param in query_string.split('&') if '=' in param
+        )
+        return query_params.get('token')
+    
+    async def authenticate_user(self) -> Tuple[bool, Optional[int]]:
+        """JWT 토큰을 검증하고 사용자를 인증합니다.
+        
+        Returns:
+            Tuple[bool, Optional[int]]: (성공 여부, 실패 시 에러 코드)
+            - (True, None): 인증 성공, self.user에 사용자 설정됨
+            - (False, WEBSOCKET_ERROR_NO_TOKEN): 토큰 없음
+            - (False, WEBSOCKET_ERROR_USER_NOT_FOUND): 사용자 없음
+            - (False, WEBSOCKET_ERROR_INVALID_TOKEN): 유효하지 않은 토큰
+        """
+        token = self.parse_token_from_query_string()
+        
+        if not token:
+            return False, WEBSOCKET_ERROR_NO_TOKEN
+        
+        try:
+            access_token = AccessToken(token)
+            user_id = access_token.get('user_id')
+            self.user = await self.get_user(user_id)
+            
+            if not self.user:
+                return False, WEBSOCKET_ERROR_USER_NOT_FOUND
+            
+            return True, None
+            
+        except (InvalidToken, TokenError):
+            return False, WEBSOCKET_ERROR_INVALID_TOKEN
+    
+    @database_sync_to_async
+    def get_user(self, user_id):
+        """사용자 조회"""
+        try:
+            return User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return None
+
+
+# MARK: - Chat Consumer
+
+class ChatConsumer(BaseAuthConsumer):
     """
     채팅 WebSocket Consumer
     
@@ -77,32 +156,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
         self.room_group_name = f'chat_{self.room_id}'
         
         # JWT 토큰 인증
-        query_string = self.scope.get('query_string', b'').decode()
-        query_params = dict(param.split('=') for param in query_string.split('&') if '=' in param)
-        token = query_params.get('token')
-        
-        if not token:
-            await self.close(code=4001)
-            return
-        
-        # 토큰 검증 및 사용자 인증
-        try:
-            access_token = AccessToken(token)
-            user_id = access_token.get('user_id')
-            self.user = await self.get_user(user_id)
-            
-            if not self.user:
-                await self.close(code=4002)
-                return
-                
-        except (InvalidToken, TokenError) as e:
-            await self.close(code=4003)
+        is_authenticated, error_code = await self.authenticate_user()
+        if not is_authenticated:
+            await self.close(code=error_code)
             return
         
         # 채팅방 존재 확인 및 멤버 권한 확인
         is_member = await self.check_room_membership()
         if not is_member:
-            await self.close(code=4004)
+            await self.close(code=WEBSOCKET_ERROR_NOT_MEMBER)
             return
         
         # 채팅방 그룹에 참여
@@ -410,14 +472,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
     # 데이터베이스 작업 (동기 함수를 비동기로 래핑)
     
     @database_sync_to_async
-    def get_user(self, user_id):
-        """사용자 조회"""
-        try:
-            return User.objects.get(id=user_id)
-        except User.DoesNotExist:
-            return None
-    
-    @database_sync_to_async
     def check_room_membership(self):
         """채팅방 멤버 권한 확인"""
         try:
@@ -549,7 +603,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             print(f"Error marking messages as read: {e}")
 
 
-class NotificationConsumer(AsyncWebsocketConsumer):
+class NotificationConsumer(BaseAuthConsumer):
     """
     알림 WebSocket Consumer
     
@@ -561,26 +615,9 @@ class NotificationConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         """WebSocket 연결 시"""
         # JWT 토큰 인증
-        query_string = self.scope.get('query_string', b'').decode()
-        query_params = dict(param.split('=') for param in query_string.split('&') if '=' in param)
-        token = query_params.get('token')
-        
-        if not token:
-            await self.close(code=4001)
-            return
-        
-        # 토큰 검증 및 사용자 인증
-        try:
-            access_token = AccessToken(token)
-            user_id = access_token.get('user_id')
-            self.user = await self.get_user(user_id)
-            
-            if not self.user:
-                await self.close(code=4002)
-                return
-                
-        except (InvalidToken, TokenError):
-            await self.close(code=4003)
+        is_authenticated, error_code = await self.authenticate_user()
+        if not is_authenticated:
+            await self.close(code=error_code)
             return
         
         # 사용자별 알림 그룹에 참여
@@ -611,11 +648,3 @@ class NotificationConsumer(AsyncWebsocketConsumer):
             'type': 'notification',
             'notification': event['notification']
         }))
-    
-    @database_sync_to_async
-    def get_user(self, user_id):
-        """사용자 조회"""
-        try:
-            return User.objects.get(id=user_id)
-        except User.DoesNotExist:
-            return None

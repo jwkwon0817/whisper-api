@@ -1,3 +1,5 @@
+from typing import Optional, Tuple
+
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.db import transaction
@@ -19,6 +21,32 @@ from .models import (
     GroupChatInvitation,
     Message,
 )
+
+# MARK: - Helper Functions
+
+def get_room_or_404(room_id) -> Tuple[Optional[ChatRoom], Optional[Response]]:
+    """채팅방을 조회하거나 404 에러 응답을 반환하는 헬퍼 함수
+    
+    Args:
+        room_id: 조회할 채팅방 ID
+        
+    Returns:
+        tuple[ChatRoom, None] | tuple[None, Response]: 
+            - 성공 시: (ChatRoom 객체, None)
+            - 실패 시: (None, 404 Response)
+    
+    Usage:
+        room, error = get_room_or_404(room_id)
+        if error:
+            return error
+    """
+    try:
+        return ChatRoom.objects.get(id=room_id), None
+    except ChatRoom.DoesNotExist:
+        return None, Response(
+            {'error': '채팅방을 찾을 수 없습니다.'},
+            status=status.HTTP_404_NOT_FOUND
+        )
 from .response_serializers import (
     ChatRoomLeaveResponseSerializer,
     ChatRoomMemberAddResponseSerializer,
@@ -326,13 +354,9 @@ class ChatRoomDetailView(APIView):
     )
     def patch(self, request, room_id):
         """채팅방 정보 수정"""
-        try:
-            room = ChatRoom.objects.get(id=room_id)
-        except ChatRoom.DoesNotExist:
-            return Response(
-                {'error': '채팅방을 찾을 수 없습니다.'},
-                status=status.HTTP_404_NOT_FOUND
-            )
+        room, error = get_room_or_404(room_id)
+        if error:
+            return error
         
         # 권한 확인 (방장 또는 관리자만 수정 가능)
         member = ChatRoomMember.objects.filter(room=room, user=request.user).first()
@@ -405,13 +429,9 @@ class MessageListView(APIView):
     )
     def get(self, request, room_id):
         """메시지 목록 조회"""
-        try:
-            room = ChatRoom.objects.get(id=room_id)
-        except ChatRoom.DoesNotExist:
-            return Response(
-                {'error': '채팅방을 찾을 수 없습니다.'},
-                status=status.HTTP_404_NOT_FOUND
-            )
+        room, error = get_room_or_404(room_id)
+        if error:
+            return error
         
         # 멤버인지 확인
         if not ChatRoomMember.objects.filter(room=room, user=request.user).exists():
@@ -455,13 +475,9 @@ class MessageListView(APIView):
     )
     def post(self, request, room_id):
         """메시지 전송"""
-        try:
-            room = ChatRoom.objects.get(id=room_id)
-        except ChatRoom.DoesNotExist:
-            return Response(
-                {'error': '채팅방을 찾을 수 없습니다.'},
-                status=status.HTTP_404_NOT_FOUND
-            )
+        room, error = get_room_or_404(room_id)
+        if error:
+            return error
         
         # 멤버인지 확인
         if not ChatRoomMember.objects.filter(room=room, user=request.user).exists():
@@ -628,13 +644,9 @@ class MessageReadView(APIView):
     )
     def post(self, request, room_id):
         """메시지 읽음 처리"""
-        try:
-            room = ChatRoom.objects.get(id=room_id)
-        except ChatRoom.DoesNotExist:
-            return Response(
-                {'error': '채팅방을 찾을 수 없습니다.'},
-                status=status.HTTP_404_NOT_FOUND
-            )
+        room, error = get_room_or_404(room_id)
+        if error:
+            return error
         
         # 멤버인지 확인
         if not ChatRoomMember.objects.filter(room=room, user=request.user).exists():
@@ -699,13 +711,9 @@ class ChatRoomLeaveView(APIView):
     )
     def post(self, request, room_id):
         """채팅방 나가기"""
-        try:
-            room = ChatRoom.objects.get(id=room_id)
-        except ChatRoom.DoesNotExist:
-            return Response(
-                {'error': '채팅방을 찾을 수 없습니다.'},
-                status=status.HTTP_404_NOT_FOUND
-            )
+        room, error = get_room_or_404(room_id)
+        if error:
+            return error
         
         # 멤버인지 확인
         member = ChatRoomMember.objects.filter(room=room, user=request.user).first()
@@ -929,13 +937,9 @@ class ChatFolderRoomView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        try:
-            room = ChatRoom.objects.get(id=room_id)
-        except ChatRoom.DoesNotExist:
-            return Response(
-                {'error': '채팅방을 찾을 수 없습니다.'},
-                status=status.HTTP_404_NOT_FOUND
-            )
+        room, error = get_room_or_404(room_id)
+        if error:
+            return error
         
         # 채팅방 멤버인지 확인
         if not ChatRoomMember.objects.filter(room=room, user=request.user).exists():
@@ -1011,13 +1015,9 @@ class ChatRoomMemberView(APIView):
     )
     def post(self, request, room_id):
         """채팅방 멤버 추가"""
-        try:
-            room = ChatRoom.objects.get(id=room_id)
-        except ChatRoom.DoesNotExist:
-            return Response(
-                {'error': '채팅방을 찾을 수 없습니다.'},
-                status=status.HTTP_404_NOT_FOUND
-            )
+        room, error = get_room_or_404(room_id)
+        if error:
+            return error
         
         # 1:1 채팅은 멤버 추가 불가
         if room.room_type == 'direct':
@@ -1079,13 +1079,9 @@ class ChatRoomMemberView(APIView):
     )
     def delete(self, request, room_id, user_id):
         """채팅방 멤버 제거"""
-        try:
-            room = ChatRoom.objects.get(id=room_id)
-        except ChatRoom.DoesNotExist:
-            return Response(
-                {'error': '채팅방을 찾을 수 없습니다.'},
-                status=status.HTTP_404_NOT_FOUND
-            )
+        room, error = get_room_or_404(room_id)
+        if error:
+            return error
         
         # 1:1 채팅은 멤버 제거 불가 (채팅방 나가기는 채팅방 삭제로 처리)
         if room.room_type == 'direct':
@@ -1174,13 +1170,9 @@ class GroupChatInvitationView(APIView):
         user_id = serializer.validated_data['user_id']
         user = request.user
         
-        try:
-            room = ChatRoom.objects.get(id=room_id)
-        except ChatRoom.DoesNotExist:
-            return Response(
-                {'error': '채팅방을 찾을 수 없습니다.'},
-                status=status.HTTP_404_NOT_FOUND
-            )
+        room, error = get_room_or_404(room_id)
+        if error:
+            return error
         
         # 그룹챗만 초대 가능
         if room.room_type != 'group':

@@ -8,6 +8,12 @@ from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.tokens import RefreshToken, UntypedToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
+from config.constants import (
+    REFRESH_TOKEN_EXPIRES_DAYS,
+    VERIFICATION_CODE_EXPIRES_SECONDS,
+    VERIFIED_TOKEN_EXPIRES_SECONDS,
+)
+
 from .models import UserDevice
 from .response_serializers import (
     DevicePrivateKeyResponseSerializer,
@@ -81,7 +87,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
                 RefreshTokenStorage.save_refresh_token(
                     user_id=user_id,
                     refresh_token=refresh_token,
-                    expires_in_days=7
+                    expires_in_days=REFRESH_TOKEN_EXPIRES_DAYS
                 )
             except (InvalidToken, TokenError) as e:
                 pass  # 에러 처리
@@ -135,7 +141,7 @@ class CustomTokenRefreshView(TokenRefreshView):
                 RefreshTokenStorage.save_refresh_token(
                     user_id=user_id,
                     refresh_token=new_refresh_token,
-                    expires_in_days=7
+                    expires_in_days=REFRESH_TOKEN_EXPIRES_DAYS
                 )
             
             return response
@@ -211,7 +217,7 @@ class RegisterView(APIView):
         RefreshTokenStorage.save_refresh_token(
             user_id=user.id,
             refresh_token=refresh_token,
-            expires_in_days=7
+            expires_in_days=REFRESH_TOKEN_EXPIRES_DAYS
         )
         
         # 사용자 정보 시리얼라이저로 응답
@@ -527,8 +533,8 @@ class SendVerificationCodeView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
         
-        # 인증번호를 Redis에 저장 (5분 만료)
-        PhoneVerificationStorage.save_verification_code(phone_number, verification_code, expires_in_seconds=300)
+        # 인증번호를 Redis에 저장
+        PhoneVerificationStorage.save_verification_code(phone_number, verification_code, expires_in_seconds=VERIFICATION_CODE_EXPIRES_SECONDS)
         
         # 시도 횟수 초기화
         PhoneVerificationStorage.reset_attempts(phone_number)
@@ -595,10 +601,10 @@ class VerifyPhoneView(APIView):
         # 인증번호 삭제
         PhoneVerificationStorage.delete_verification_code(phone_number)
         
-        # 인증 완료 토큰 생성 및 저장 (10분 만료)
+        # 인증 완료 토큰 생성 및 저장
         import uuid
         verified_token = str(uuid.uuid4())
-        PhoneVerificationStorage.save_verified_token(phone_number, verified_token, expires_in_seconds=600)
+        PhoneVerificationStorage.save_verified_token(phone_number, verified_token, expires_in_seconds=VERIFIED_TOKEN_EXPIRES_SECONDS)
         
         # 시도 횟수 초기화
         PhoneVerificationStorage.reset_attempts(phone_number)
@@ -607,7 +613,7 @@ class VerifyPhoneView(APIView):
             {
                 'message': '인증이 완료되었습니다.',
                 'verified_token': verified_token,
-                'expires_in': 600  # 10분
+                'expires_in': VERIFIED_TOKEN_EXPIRES_SECONDS
             },
             status=status.HTTP_200_OK
         )
@@ -685,7 +691,7 @@ class DevRegisterView(APIView):
         RefreshTokenStorage.save_refresh_token(
             user_id=user.id,
             refresh_token=refresh_token,
-            expires_in_days=7
+            expires_in_days=REFRESH_TOKEN_EXPIRES_DAYS
         )
         
         # 사용자 정보 시리얼라이저로 응답
