@@ -1,4 +1,5 @@
 import uuid
+
 from django.contrib.auth import get_user_model
 from django.db import models
 
@@ -82,8 +83,10 @@ class Message(models.Model):
     room = models.ForeignKey(ChatRoom, on_delete=models.CASCADE, related_name='messages', verbose_name='채팅방')
     sender = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='sent_messages', verbose_name='발신자')
     message_type = models.CharField(max_length=10, choices=MESSAGE_TYPE_CHOICES, default='text', verbose_name='메시지 타입')
-    content = models.TextField(verbose_name='메시지 내용 (암호화된 내용)')
-    encrypted_content = models.TextField(null=True, blank=True, verbose_name='암호화된 원본 내용')
+    content = models.TextField(null=True, blank=True, verbose_name='메시지 내용 (그룹 채팅용 평문)')
+    encrypted_content = models.TextField(null=True, blank=True, verbose_name='암호화된 메시지 내용 (AES 암호화)')
+    encrypted_session_key = models.TextField(null=True, blank=True, verbose_name='암호화된 세션 키 (RSA 암호화, 상대방 공개키로 암호화)')
+    self_encrypted_session_key = models.TextField(null=True, blank=True, verbose_name='자기 암호화된 세션 키 (RSA 암호화, 내 공개키로 암호화)')
     asset = models.ForeignKey('common.Asset', on_delete=models.SET_NULL, null=True, blank=True, verbose_name='첨부 파일')
     reply_to = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='replies', verbose_name='답장 대상')
     is_read = models.BooleanField(default=False, verbose_name='읽음 여부')
@@ -102,6 +105,17 @@ class Message(models.Model):
     
     def __str__(self):
         return f"{self.sender.name if self.sender else 'System'}: {self.content[:50]}"
+    
+    def is_hybrid_encrypted(self):
+        """하이브리드 암호화 방식인지 확인"""
+        return self.encrypted_session_key is not None
+    
+    def is_legacy_encrypted(self):
+        """기존 RSA-OAEP 방식인지 확인"""
+        return (
+            self.encrypted_content is not None and 
+            self.encrypted_session_key is None
+        )
 
 
 class ChatFolder(models.Model):
@@ -110,6 +124,7 @@ class ChatFolder(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='chat_folders', verbose_name='사용자')
     name = models.CharField(max_length=100, verbose_name='폴더 이름')
     color = models.CharField(max_length=7, default='#000000', verbose_name='폴더 색상')
+    icon = models.CharField(max_length=50, default='folder.fill', verbose_name='폴더 아이콘')
     order = models.IntegerField(default=0, verbose_name='정렬 순서')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -143,18 +158,57 @@ class ChatFolderRoom(models.Model):
         return f"{self.room} in {self.folder.name}"
 
 
+class DirectChatInvitation(models.Model):
+    """1:1 채팅 초대 모델"""
+    STATUS_CHOICES = [
+        ('pending', '대기중'),
+        ('accepted', '수락됨'),
+        ('rejected', '거절됨'),
+        ('cancelled', '취소됨'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    inviter = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_direct_invitations', verbose_name='초대자')
+    invitee = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_direct_invitations', verbose_name='초대받은 사람')
+    room = models.ForeignKey(ChatRoom, on_delete=models.CASCADE, null=True, blank=True, related_name='direct_invitations', verbose_name='채팅방')
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending', verbose_name='상태')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'direct_chat_invitations'
+        verbose_name = '1:1 채팅 초대'
+        verbose_name_plural = '1:1 채팅 초대'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['invitee', 'status']),
+            models.Index(fields=['inviter', 'invitee', 'status']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['inviter', 'invitee'],
+                condition=models.Q(status='pending'),
+                name='unique_pending_direct_invitation'
+            ),
+        ]
+    
+    def __str__(self):
+        return f"{self.inviter.name} -> {self.invitee.name} (1:1 채팅) ({self.status})"
+
+
 class GroupChatInvitation(models.Model):
     """그룹챗 초대 모델"""
     STATUS_CHOICES = [
         ('pending', '대기중'),
         ('accepted', '수락됨'),
         ('rejected', '거절됨'),
+        ('cancelled', '취소됨'),
     ]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     room = models.ForeignKey(ChatRoom, on_delete=models.CASCADE, related_name='invitations', verbose_name='채팅방')
-    inviter = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_invitations', verbose_name='초대자')
-    invitee = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_invitations', verbose_name='초대받은 사람')
+    inviter = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_group_invitations', verbose_name='초대자')
+    invitee = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_group_invitations', verbose_name='초대받은 사람')
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending', verbose_name='상태')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

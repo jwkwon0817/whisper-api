@@ -13,8 +13,6 @@ class EncryptionService:
     
     @staticmethod
     def _get_key():
-        """암호화 키 가져오기 (환경변수 또는 설정에서)"""
-        # 환경변수에서 키 가져오기
         key = getattr(settings, 'ENCRYPTION_KEY', None)
         
         if not key:
@@ -28,11 +26,8 @@ class EncryptionService:
             else:
                 raise ValueError("ENCRYPTION_KEY 환경변수가 설정되지 않았습니다.")
         else:
-            # 환경변수에서 키를 읽었을 때
-            if settings.DEBUG:
-                print(f"[DEBUG] ENCRYPTION_KEY 사용: {key if isinstance(key, str) else key.decode()[:20]}...")
+            pass
         
-        # 문자열인 경우 bytes로 변환
         if isinstance(key, str):
             key = key.encode()
         

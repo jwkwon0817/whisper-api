@@ -54,6 +54,17 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.IsAuthenticated'
     ),
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+        'rest_framework.throttling.ScopedRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '20/minute',
+        'user': '200/minute',
+        'chat_action': '5/second',
+        'invitation': '10/minute',
+    }
 }
 
 MIDDLEWARE = [
@@ -88,14 +99,22 @@ WSGI_APPLICATION = 'config.wsgi.application'
 ASGI_APPLICATION = 'config.asgi.application'
 
 # Channels Layer 설정 (WebSocket을 위한 Redis 백엔드)
-CHANNEL_LAYERS = {
-    'default': {
-        'BACKEND': 'channels_redis.core.RedisChannelLayer',
-        'CONFIG': {
-            "hosts": [config('REDIS_URL', default=None)] if config('REDIS_URL', default=None) else [('127.0.0.1', 6379)],
+# 개발 환경에서는 InMemoryChannelLayer 사용 (Redis 없이 테스트 가능)
+if DEBUG and not config('USE_REDIS_CHANNELS', default=False, cast=bool):
+    CHANNEL_LAYERS = {
+        'default': {
+            'BACKEND': 'channels.layers.InMemoryChannelLayer',
         },
-    },
-}
+    }
+else:
+    CHANNEL_LAYERS = {
+        'default': {
+            'BACKEND': 'channels_redis.core.RedisChannelLayer',
+            'CONFIG': {
+                "hosts": [config('REDIS_URL', default=None)] if config('REDIS_URL', default=None) else [('127.0.0.1', 6379)],
+            },
+        },
+    }
 
 
 # Database 설정

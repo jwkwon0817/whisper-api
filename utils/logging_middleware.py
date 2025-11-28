@@ -4,6 +4,9 @@ DEBUG 모드에서 모든 요청/응답을 로깅하는 미들웨어
 
 import json
 import logging
+import uuid
+from datetime import datetime, date
+from decimal import Decimal
 from django.conf import settings
 from django.utils.deprecation import MiddlewareMixin
 
@@ -99,13 +102,13 @@ class RequestResponseLoggingMiddleware(MiddlewareMixin):
                 # DRF Response
                 masked_data = self._mask_sensitive_data(response.data)
                 logger.info(f'📦 Response Body:')
-                logger.info(json.dumps(masked_data, indent=2, ensure_ascii=False))
+                logger.info(json.dumps(masked_data, indent=2, ensure_ascii=False, default=self._json_serializer))
             elif response.get('Content-Type', '').startswith('application/json'):
                 # JSON Response
                 content = json.loads(response.content.decode('utf-8'))
                 masked_content = self._mask_sensitive_data(content)
                 logger.info(f'📦 Response Body:')
-                logger.info(json.dumps(masked_content, indent=2, ensure_ascii=False))
+                logger.info(json.dumps(masked_content, indent=2, ensure_ascii=False, default=self._json_serializer))
             else:
                 logger.info(f'📦 Response Body: ({response.get("Content-Type", "unknown")})')
         except Exception as e:
@@ -137,6 +140,9 @@ class RequestResponseLoggingMiddleware(MiddlewareMixin):
                         masked[key] = value
                 elif key.lower() == 'encrypted_private_key':
                     masked[key] = '*** (encrypted)'
+                elif isinstance(value, (uuid.UUID,)):
+                    # UUID를 문자열로 변환
+                    masked[key] = str(value)
                 elif isinstance(value, dict):
                     masked[key] = self._mask_sensitive_data(value)
                 elif isinstance(value, list):
@@ -146,8 +152,21 @@ class RequestResponseLoggingMiddleware(MiddlewareMixin):
             return masked
         elif isinstance(data, list):
             return [self._mask_sensitive_data(item) if isinstance(item, (dict, list)) else item for item in data]
+        elif isinstance(data, uuid.UUID):
+            # UUID를 문자열로 변환
+            return str(data)
         else:
             return data
+    
+    def _json_serializer(self, obj):
+        """JSON 직렬화를 위한 커스텀 직렬화 함수"""
+        if isinstance(obj, uuid.UUID):
+            return str(obj)
+        elif isinstance(obj, (datetime, date)):
+            return obj.isoformat()
+        elif isinstance(obj, Decimal):
+            return float(obj)
+        raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
     
     def _get_status_emoji(self, status_code):
         """상태 코드에 따른 이모지"""

@@ -12,6 +12,7 @@ class MessageListResponseSerializer(serializers.Serializer):
     page = serializers.IntegerField(read_only=True)
     page_size = serializers.IntegerField(read_only=True)
     total = serializers.IntegerField(read_only=True)
+    has_next = serializers.BooleanField(read_only=True)
 
 
 class MessageReadResponseSerializer(serializers.Serializer):
