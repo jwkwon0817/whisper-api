@@ -7,7 +7,6 @@ User = get_user_model()
 
 
 class ChatRoom(models.Model):
-    """채팅방 모델"""
     ROOM_TYPE_CHOICES = [
         ('direct', '1:1 채팅'),
         ('group', '그룹 채팅'),
@@ -34,17 +33,14 @@ class ChatRoom(models.Model):
     
     @property
     def member_count(self):
-        """채팅방 멤버 수"""
         return self.members.count()
     
     @property
     def last_message(self):
-        """마지막 메시지"""
         return self.messages.order_by('-created_at').first()
 
 
 class ChatRoomMember(models.Model):
-    """채팅방 멤버 모델"""
     ROLE_CHOICES = [
         ('owner', '방장'),
         ('admin', '관리자'),
@@ -71,7 +67,6 @@ class ChatRoomMember(models.Model):
 
 
 class Message(models.Model):
-    """메시지 모델"""
     MESSAGE_TYPE_CHOICES = [
         ('text', '텍스트'),
         ('image', '이미지'),
@@ -107,11 +102,9 @@ class Message(models.Model):
         return f"{self.sender.name if self.sender else 'System'}: {self.content[:50]}"
     
     def is_hybrid_encrypted(self):
-        """하이브리드 암호화 방식인지 확인"""
         return self.encrypted_session_key is not None
     
     def is_legacy_encrypted(self):
-        """기존 RSA-OAEP 방식인지 확인"""
         return (
             self.encrypted_content is not None and 
             self.encrypted_session_key is None
@@ -119,7 +112,6 @@ class Message(models.Model):
 
 
 class ChatFolder(models.Model):
-    """채팅방 폴더 모델"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='chat_folders', verbose_name='사용자')
     name = models.CharField(max_length=100, verbose_name='폴더 이름')
@@ -140,7 +132,6 @@ class ChatFolder(models.Model):
 
 
 class ChatFolderRoom(models.Model):
-    """폴더-채팅방 연결 모델"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     folder = models.ForeignKey(ChatFolder, on_delete=models.CASCADE, related_name='rooms', verbose_name='폴더')
     room = models.ForeignKey(ChatRoom, on_delete=models.CASCADE, related_name='folders', verbose_name='채팅방')
@@ -159,7 +150,6 @@ class ChatFolderRoom(models.Model):
 
 
 class DirectChatInvitation(models.Model):
-    """1:1 채팅 초대 모델"""
     STATUS_CHOICES = [
         ('pending', '대기중'),
         ('accepted', '수락됨'),
@@ -197,7 +187,6 @@ class DirectChatInvitation(models.Model):
 
 
 class GroupChatInvitation(models.Model):
-    """그룹챗 초대 모델"""
     STATUS_CHOICES = [
         ('pending', '대기중'),
         ('accepted', '수락됨'),
@@ -228,7 +217,6 @@ class GroupChatInvitation(models.Model):
         return f"{self.inviter.name} -> {self.invitee.name} ({self.room.name}) ({self.status})"
     
     def clean(self):
-        """검증: 그룹챗만 초대 가능, 이미 멤버인 경우 초대 불가"""
         from django.core.exceptions import ValidationError
         
         if self.room.room_type != 'group':

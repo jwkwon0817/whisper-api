@@ -22,31 +22,13 @@ from .models import (
     Message,
 )
 
-# MARK: - Helper Functions
 
 def get_room_or_404(room_id) -> Tuple[Optional[ChatRoom], Optional[Response]]:
-    """채팅방을 조회하거나 404 에러 응답을 반환하는 헬퍼 함수
-    
-    Args:
-        room_id: 조회할 채팅방 ID
-        
-    Returns:
-        tuple[ChatRoom, None] | tuple[None, Response]: 
-            - 성공 시: (ChatRoom 객체, None)
-            - 실패 시: (None, 404 Response)
-    
-    Usage:
-        room, error = get_room_or_404(room_id)
-        if error:
-            return error
-    """
     try:
         return ChatRoom.objects.get(id=room_id), None
     except ChatRoom.DoesNotExist:
-        return None, Response(
-            {'error': '채팅방을 찾을 수 없습니다.'},
-            status=status.HTTP_404_NOT_FOUND
-        )
+        return None, Response({'error': '채팅방을 찾을 수 없습니다.'}, status=status.HTTP_404_NOT_FOUND)
+
 from .response_serializers import (
     ChatRoomLeaveResponseSerializer,
     MessageListResponseSerializer,
@@ -58,7 +40,6 @@ from .serializers import (
     ChatFolderRoomSerializer,
     ChatFolderSerializer,
     ChatInvitationListSerializer,
-    ChatRoomMemberSerializer,
     ChatRoomSerializer,
     DirectChatCreateSerializer,
     DirectChatInvitationResponseSerializer,
@@ -72,12 +53,10 @@ from .serializers import (
     MessageReadSerializer,
     MessageSerializer,
     MessageUpdateSerializer,
-    UserBasicSerializer,
 )
 
 
 class ChatRoomListView(APIView):
-    """채팅방 목록 조회"""
     permission_classes = [permissions.IsAuthenticated]
     
     @extend_schema(
@@ -90,23 +69,18 @@ class ChatRoomListView(APIView):
         }
     )
     def get(self, request):
-        """참여한 채팅방 목록 조회"""
         user = request.user
         
-        # 사용자가 멤버로 참여한 채팅방 조회
         rooms = ChatRoom.objects.filter(
             members__user=user
         ).prefetch_related(
             Prefetch('members', queryset=ChatRoomMember.objects.select_related('user')),
-            # 마지막 메시지만 가져오기 위해 to_attr 사용
-            # 슬라이싱은 Prefetch 내부에서 불가능하므로, serializer에서 첫 번째만 사용
             Prefetch(
                 'messages',
                 queryset=Message.objects.select_related('sender', 'asset', 'reply_to', 'reply_to__sender')
                     .order_by('-created_at'),
                 to_attr='last_message_list'
             ),
-            # 폴더 정보 prefetch
             Prefetch(
                 'folders',
                 queryset=ChatFolderRoom.objects.filter(folder__user=user).select_related('folder'),
@@ -119,7 +93,6 @@ class ChatRoomListView(APIView):
 
 
 class DirectChatCreateView(APIView):
-    """1:1 채팅 생성"""
     permission_classes = [permissions.IsAuthenticated]
     throttle_scope = 'invitation'
     
@@ -135,21 +108,18 @@ class DirectChatCreateView(APIView):
         }
     )
     def post(self, request):
-        """1:1 채팅 초대 전송"""
         serializer = DirectChatCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
         other_user_id = serializer.validated_data['user_id']
         user = request.user
         
-        # 자기 자신과는 채팅 불가
         if other_user_id == user.id:
             return Response(
                 {'error': '자기 자신과는 1:1 채팅을 생성할 수 없습니다.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # 상대방 사용자 확인
         try:
             other_user = User.objects.get(id=other_user_id)
         except User.DoesNotExist:
@@ -159,7 +129,6 @@ class DirectChatCreateView(APIView):
             )
         
         with transaction.atomic():
-            # 기존 1:1 채팅방 확인 (같은 두 사용자 조합이 하나만 존재하도록 보장)
             existing_room = ChatRoom.objects.filter(
                 room_type='direct',
                 members__user=user
@@ -172,14 +141,12 @@ class DirectChatCreateView(APIView):
             ).distinct().first()
             
             if existing_room:
-                # 기존 채팅방이 있으면 반환
                 serializer = ChatRoomSerializer(existing_room, context={'request': request})
                 return Response({
                     'message': '이미 채팅방이 존재합니다.',
                     'room': serializer.data
                 }, status=status.HTTP_200_OK)
             
-            # 이미 대기 중인 초대가 있는지 확인 (양방향 모두 체크)
             existing_invitation = DirectChatInvitation.objects.filter(
                 Q(inviter=user, invitee=other_user, status='pending') |
                 Q(inviter=other_user, invitee=user, status='pending')
@@ -187,46 +154,35 @@ class DirectChatCreateView(APIView):
             
             if existing_invitation:
                 if existing_invitation.inviter == user:
-                    # 기존 초대 객체를 시리얼라이즈하여 반환
                     invitation_serializer = DirectChatInvitationSerializer(existing_invitation, context={'request': request})
                     return Response(invitation_serializer.data, status=status.HTTP_200_OK)
                 else:
-                    # 상대방이 나에게 초대를 보낸 경우, 자동으로 수락하고 채팅방 생성
                     return self._accept_invitation(existing_invitation, request)
             
-            # 1:1 채팅 생성 시 상대방의 공개키 확인
             if not other_user.public_key:
                 return Response(
                     {'error': '상대방이 공개키를 등록하지 않았습니다. E2EE를 사용하려면 공개키가 필요합니다.'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # 초대 생성
             invitation = DirectChatInvitation.objects.create(
                 inviter=user,
                 invitee=other_user
             )
             
-            # TODO: 실시간 알림 전송 (WebSocket or Push Notification)
-            
-            # 초대 객체를 시리얼라이즈하여 반환
             invitation_serializer = DirectChatInvitationSerializer(invitation, context={'request': request})
             return Response(invitation_serializer.data, status=status.HTTP_201_CREATED)
     
     def _accept_invitation(self, invitation, request):
-        """초대 수락 처리 (내부 헬퍼 메서드)"""
         with transaction.atomic():
-            # 채팅방 생성
             room = ChatRoom.objects.create(
                 room_type='direct',
                 created_by=invitation.inviter
             )
             
-            # 멤버 추가
             ChatRoomMember.objects.create(room=room, user=invitation.inviter, role='member')
             ChatRoomMember.objects.create(room=room, user=invitation.invitee, role='member')
             
-            # 초대 상태 업데이트
             invitation.room = room
             invitation.status = 'accepted'
             invitation.save()
@@ -239,7 +195,6 @@ class DirectChatCreateView(APIView):
 
 
 class GroupChatCreateView(APIView):
-    """그룹 채팅 생성"""
     permission_classes = [permissions.IsAuthenticated]
     throttle_scope = 'invitation'
     
@@ -254,7 +209,6 @@ class GroupChatCreateView(APIView):
         }
     )
     def post(self, request):
-        """그룹 채팅 생성 및 초대"""
         serializer = GroupChatCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
@@ -263,7 +217,6 @@ class GroupChatCreateView(APIView):
         member_ids = serializer.validated_data.get('member_ids', [])
         user = request.user
         
-        # 그룹 채팅방 생성
         room = ChatRoom.objects.create(
             room_type='group',
             name=name,
@@ -271,16 +224,13 @@ class GroupChatCreateView(APIView):
             created_by=user
         )
         
-        # 생성자를 방장으로 추가 (자동 승인)
         ChatRoomMember.objects.create(room=room, user=user, role='owner')
         
-        # 다른 멤버들에게 초대 전송
         invited_count = 0
         for member_id in member_ids:
             if member_id != user.id:
                 try:
                     member_user = User.objects.get(id=member_id)
-                    # 초대 생성
                     GroupChatInvitation.objects.get_or_create(
                         room=room,
                         inviter=user,
@@ -291,8 +241,6 @@ class GroupChatCreateView(APIView):
                 except User.DoesNotExist:
                     continue
         
-        # TODO: 실시간 알림 전송 (WebSocket or Push Notification)
-        
         serializer = ChatRoomSerializer(room, context={'request': request})
         return Response({
             'message': f'그룹 채팅방을 생성하고 {invited_count}명에게 초대를 전송했습니다.',
@@ -301,7 +249,6 @@ class GroupChatCreateView(APIView):
 
 
 class ChatRoomDetailView(APIView):
-    """채팅방 상세 조회 및 수정"""
     permission_classes = [permissions.IsAuthenticated]
     
     @extend_schema(
@@ -315,7 +262,6 @@ class ChatRoomDetailView(APIView):
         }
     )
     def get(self, request, room_id):
-        """채팅방 상세 조회"""
         try:
             room = ChatRoom.objects.prefetch_related(
                 Prefetch('members', queryset=ChatRoomMember.objects.select_related('user'))
@@ -326,7 +272,6 @@ class ChatRoomDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        # 멤버인지 확인
         if not ChatRoomMember.objects.filter(room=room, user=request.user).exists():
             return Response(
                 {'error': '채팅방 멤버가 아닙니다.'},
@@ -337,11 +282,9 @@ class ChatRoomDetailView(APIView):
         return Response(serializer.data)
     
 class MessageListView(APIView):
-    """메시지 목록 조회 및 전송"""
     permission_classes = [permissions.IsAuthenticated]
     
     def get_throttles(self):
-        """POST 요청(메시지 전송)에만 별도의 속도 제한 적용"""
         if self.request.method == 'POST':
             self.throttle_scope = 'chat_action'
         else:
@@ -376,24 +319,20 @@ class MessageListView(APIView):
         }
     )
     def get(self, request, room_id):
-        """메시지 목록 조회"""
         room, error = get_room_or_404(room_id)
         if error:
             return error
         
-        # 멤버인지 확인
         if not ChatRoomMember.objects.filter(room=room, user=request.user).exists():
             return Response(
                 {'error': '채팅방 멤버가 아닙니다.'},
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        # 페이지네이션
         page = int(request.query_params.get('page', 1))
         page_size = int(request.query_params.get('page_size', 50))
         offset = (page - 1) * page_size
         
-        # 메시지 조회 (최신순)
         messages = Message.objects.filter(room=room).select_related(
             'sender', 'reply_to', 'reply_to__sender', 'asset'
         ).order_by('-created_at')[offset:offset + page_size]
@@ -449,7 +388,6 @@ class MessageListView(APIView):
 
 
 class MessageDetailView(APIView):
-    """메시지 수정 및 삭제"""
     permission_classes = [permissions.IsAuthenticated]
     throttle_scope = 'chat_action'
 
@@ -577,7 +515,6 @@ class MessageDetailView(APIView):
 
 
 class MessageReadView(APIView):
-    """메시지 읽음 처리 뷰"""
     permission_classes = [permissions.IsAuthenticated]
     
     @extend_schema(
@@ -643,7 +580,6 @@ class MessageReadView(APIView):
 
 
 class ChatRoomLeaveView(APIView):
-    """채팅방 나가기 뷰"""
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = EmptySerializer
     
@@ -713,7 +649,6 @@ class ChatRoomLeaveView(APIView):
 
 
 class ChatFolderListView(APIView):
-    """채팅방 폴더 목록 조회 및 생성"""
     permission_classes = [permissions.IsAuthenticated]
     
     @extend_schema(
@@ -726,7 +661,6 @@ class ChatFolderListView(APIView):
         }
     )
     def get(self, request):
-        """폴더 목록 조회"""
         folders = ChatFolder.objects.filter(user=request.user).prefetch_related('rooms__room')
         serializer = ChatFolderSerializer(folders, many=True)
         return Response(serializer.data)
@@ -1063,18 +997,15 @@ class GroupChatInvitationResponseView(APIView):
         
         if action == 'accept':
             with transaction.atomic():
-                # 초대 수락 시 채팅방에 멤버로 추가
                 invitation.status = 'accepted'
                 invitation.save()
                 
-                # 채팅방 멤버로 추가
                 ChatRoomMember.objects.get_or_create(
                     room=invitation.room,
                     user=user,
                     defaults={'role': 'member'}
                 )
                 
-                # room을 다시 조회하여 최신 members 정보 가져오기
                 invitation.room = ChatRoom.objects.prefetch_related(
                     Prefetch('members', queryset=ChatRoomMember.objects.select_related('user'))
                 ).get(id=invitation.room.id)
@@ -1098,12 +1029,11 @@ class DirectChatInvitationResponseView(APIView):
         description='받은 1:1 채팅 초대를 수락하거나 거절합니다. 수락 시 채팅방이 생성됩니다.',
         request=DirectChatInvitationResponseSerializer,
         responses={
-            200: ChatRoomSerializer,  # 수락 시 생성된 채팅방 반환
+            200: ChatRoomSerializer,
             404: OpenApiResponse(description='초대를 찾을 수 없음'),
         }
     )
     def post(self, request, invitation_id):
-        """1:1 채팅 초대 수락/거절"""
         serializer = DirectChatInvitationResponseSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
@@ -1124,30 +1054,24 @@ class DirectChatInvitationResponseView(APIView):
         
         if action == 'accept':
             with transaction.atomic():
-                # 초대 수락 시 1:1 채팅방 생성
                 invitation.status = 'accepted'
                 invitation.save()
                 
-                # 1:1 채팅방 생성
                 room = ChatRoom.objects.create(
                     room_type='direct',
                     created_by=invitation.inviter
                 )
                 
-                # 초대자와 초대받은 사람 모두 멤버로 추가
                 ChatRoomMember.objects.create(room=room, user=invitation.inviter, role='member')
                 ChatRoomMember.objects.create(room=room, user=invitation.invitee, role='member')
                 
-                # 생성된 채팅방 조회 (members prefetch)
                 room = ChatRoom.objects.prefetch_related(
                     Prefetch('members', queryset=ChatRoomMember.objects.select_related('user'))
                 ).get(id=room.id)
                 
-                # 생성된 채팅방 반환
                 room_serializer = ChatRoomSerializer(room, context={'request': request})
                 return Response(room_serializer.data, status=status.HTTP_201_CREATED)
         else:
-            # 초대 거절
             invitation.status = 'rejected'
             invitation.save()
             
@@ -1156,7 +1080,6 @@ class DirectChatInvitationResponseView(APIView):
 
 
 class AllChatInvitationListView(APIView):
-    """통합 채팅 초대 목록 조회 (1:1 + 그룹)"""
     permission_classes = [permissions.IsAuthenticated]
     
     @extend_schema(
@@ -1186,21 +1109,17 @@ class AllChatInvitationListView(APIView):
         }
     )
     def get(self, request):
-        """받은 모든 채팅 초대 목록 조회 (1:1 + 그룹)"""
         user = request.user
         
-        # 페이지네이션 파라미터
         page = int(request.query_params.get('page', 1))
         page_size = int(request.query_params.get('page_size', 20))
         offset = (page - 1) * page_size
         
-        # 1:1 채팅 초대 조회
         direct_invitations = DirectChatInvitation.objects.filter(
             invitee=user,
             status='pending'
         ).select_related('inviter', 'invitee')
         
-        # 그룹 채팅 초대 조회
         group_invitations = GroupChatInvitation.objects.filter(
             invitee=user,
             status='pending'
@@ -1208,44 +1127,38 @@ class AllChatInvitationListView(APIView):
             Prefetch('room__members', queryset=ChatRoomMember.objects.select_related('user'))
         )
         
-        # 통합 리스트 생성
         invitation_data = []
         
-        # 1:1 채팅 초대 데이터 구성
         for invitation in direct_invitations:
             invitation_data.append({
                 'id': invitation.id,
                 'type': 'direct',
-                'inviter': invitation.inviter,  # User 객체를 직접 전달
-                'invitee': invitation.invitee,  # User 객체를 직접 전달
+                'inviter': invitation.inviter,
+                'invitee': invitation.invitee,
                 'room': None,
                 'status': invitation.status,
                 'created_at': invitation.created_at,
                 'updated_at': invitation.updated_at,
             })
         
-        # 그룹 채팅 초대 데이터 구성
         for invitation in group_invitations:
             invitation_data.append({
                 'id': invitation.id,
                 'type': 'group',
-                'inviter': invitation.inviter,  # User 객체를 직접 전달
-                'invitee': invitation.invitee,  # User 객체를 직접 전달
-                'room': invitation.room,  # ChatRoom 객체를 직접 전달
+                'inviter': invitation.inviter,
+                'invitee': invitation.invitee,
+                'room': invitation.room,
                 'status': invitation.status,
                 'created_at': invitation.created_at,
                 'updated_at': invitation.updated_at,
             })
         
-        # 생성 시간 기준으로 정렬 (최신순)
         invitation_data.sort(key=lambda x: x['created_at'], reverse=True)
         
-        # 페이지네이션 적용
         total = len(invitation_data)
         paginated_data = invitation_data[offset:offset + page_size]
         has_next = (page * page_size) < total
         
-        # 시리얼라이저에 context 전달 (ChatRoomSerializer가 request를 필요로 함)
         serializer = ChatInvitationListSerializer(paginated_data, many=True, context={'request': request})
         return Response({
             'results': serializer.data,

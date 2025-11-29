@@ -1,17 +1,13 @@
-from django.shortcuts import render
+from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from drf_spectacular.utils import extend_schema, OpenApiParameter
-from drf_spectacular.types import OpenApiTypes
 
 from utils.s3_utils import S3Uploader
-from .models import Asset
 
 
 class FileUploadView(APIView):
-    """파일 업로드 API"""
     permission_classes = [IsAuthenticated]
 
     @extend_schema(
@@ -50,7 +46,6 @@ class FileUploadView(APIView):
         }
     )
     def post(self, request):
-        """파일 업로드"""
         file = request.FILES.get('file')
         folder = request.data.get('folder', 'chat')
         
@@ -62,7 +57,7 @@ class FileUploadView(APIView):
         
         try:
             uploader = S3Uploader()
-            asset, file_url = uploader.upload_file(file, folder=folder)
+            asset, _ = uploader.upload_file(file, folder=folder)
             
             return Response({
                 'id': str(asset.id),

@@ -42,7 +42,6 @@ User = get_user_model()
 
 
 class CustomTokenObtainPairView(TokenObtainPairView):
-    """로그인 시 Refresh Token을 Redis에 저장"""
     serializer_class = CustomTokenObtainPairSerializer
     
     @extend_schema(
@@ -80,7 +79,6 @@ class CustomTokenObtainPairView(TokenObtainPairView):
 
 
 class CustomTokenRefreshView(TokenRefreshView):
-    """Refresh Token 갱신 시 Redis에서 검증"""
     
     @extend_schema(
         tags=['Auth'],
@@ -101,27 +99,22 @@ class CustomTokenRefreshView(TokenRefreshView):
             )
         
         try:
-            # Refresh Token에서 user_id 추출
             decoded_data = UntypedToken(refresh_token)
             user_id = decoded_data['user_id']
             
-            # Redis에서 토큰 검증
             if not RefreshTokenStorage.is_token_valid(user_id, refresh_token):
                 return Response(
                     {'error': 'Invalid or expired refresh token'},
                     status=status.HTTP_401_UNAUTHORIZED
                 )
             
-            # 기존 토큰 삭제
             RefreshTokenStorage.delete_refresh_token(user_id, refresh_token)
             
-            # 새 토큰 발급
             response = super().post(request, *args, **kwargs)
             
             if response.status_code == 200:
                 new_refresh_token = response.data.get('refresh')
                 
-                # 새 Refresh Token을 Redis에 저장
                 RefreshTokenStorage.save_refresh_token(
                     user_id=user_id,
                     refresh_token=new_refresh_token,
@@ -130,7 +123,7 @@ class CustomTokenRefreshView(TokenRefreshView):
             
             return response
             
-        except (InvalidToken, TokenError) as e:
+        except (InvalidToken, TokenError):
             return Response(
                 {'error': 'Invalid token'},
                 status=status.HTTP_401_UNAUTHORIZED
@@ -138,10 +131,9 @@ class CustomTokenRefreshView(TokenRefreshView):
 
 
 class RegisterView(APIView):
-    """회원가입 뷰"""
     permission_classes = [permissions.AllowAny]
-    authentication_classes = []  # 인증 불필요
-    parser_classes = [MultiPartParser, FormParser]  # 파일 업로드 지원
+    authentication_classes = []
+    parser_classes = [MultiPartParser, FormParser]
     
     @extend_schema(
         tags=['Auth'],
@@ -173,24 +165,20 @@ class RegisterView(APIView):
         }
     )
     def post(self, request):
-        """회원가입 - 사용자 생성 후 JWT 토큰 발급"""
         serializer = UserRegistrationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
         
-        # JWT 토큰 생성
         refresh = RefreshToken.for_user(user)
         access_token = str(refresh.access_token)
         refresh_token = str(refresh)
         
-        # Refresh Token을 Redis에 저장
         RefreshTokenStorage.save_refresh_token(
             user_id=user.id,
             refresh_token=refresh_token,
             expires_in_days=REFRESH_TOKEN_EXPIRES_DAYS
         )
         
-        # 사용자 정보 시리얼라이저로 응답
         user_serializer = UserSerializer(user)
         
         return Response(
@@ -204,9 +192,8 @@ class RegisterView(APIView):
 
 
 class LogoutView(APIView):
-    """로그아웃 뷰"""
     permission_classes = [permissions.IsAuthenticated]
-    serializer_class = None  # Request body 없음
+    serializer_class = None
     
     @extend_schema(
         tags=['Auth'],
@@ -225,7 +212,6 @@ class LogoutView(APIView):
         }
     )
     def post(self, request):
-        """로그아웃 - Refresh Token 삭제"""
         refresh_token = request.data.get('refresh')
         
         if refresh_token:
@@ -241,7 +227,6 @@ class LogoutView(APIView):
 
 
 class UserMeView(APIView):
-    """내 정보 조회 뷰"""
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = UserSerializer
     
@@ -254,13 +239,11 @@ class UserMeView(APIView):
         }
     )
     def get(self, request):
-        """현재 사용자 정보 조회"""
         serializer = UserSerializer(request.user)
         return Response(serializer.data)
 
 
 class UserPublicKeyView(APIView):
-    """사용자 공개키 조회 뷰"""
     permission_classes = [permissions.IsAuthenticated]
     
     @extend_schema(
@@ -273,7 +256,6 @@ class UserPublicKeyView(APIView):
         }
     )
     def get(self, request, user_id):
-        """사용자 공개키 조회"""
         try:
             user = User.objects.get(id=user_id)
         except User.DoesNotExist:
@@ -290,9 +272,8 @@ class UserPublicKeyView(APIView):
 
 
 class SendVerificationCodeView(APIView):
-    """인증번호 전송 뷰"""
     permission_classes = [permissions.AllowAny]
-    authentication_classes = []  # 인증 불필요
+    authentication_classes = []
     serializer_class = PhoneVerificationSerializer
     
     @extend_schema(
@@ -308,16 +289,13 @@ class SendVerificationCodeView(APIView):
         }
     )
     def post(self, request):
-        """인증번호 전송"""
         serializer = PhoneVerificationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
         phone_number = serializer.validated_data['phone_number']
         
-        # 이미 가입된 번호인지 확인 (암호화된 값 복호화 후 비교)
         from utils.encryption import EncryptionService
 
-        # 모든 사용자를 가져와서 복호화 후 비교
         for user in User.objects.all():
             if EncryptionService.check_phone_number(phone_number, user.phone_number):
                 return Response(
@@ -329,7 +307,6 @@ class SendVerificationCodeView(APIView):
         limit_seconds = 3 if settings.DEBUG else 60
         
         if not PhoneVerificationStorage.check_rate_limit(phone_number, limit_seconds=limit_seconds):
-            # Rate Limit 체크 실패 시 Redis 연결 문제일 수 있으므로 로그 확인
             import logging
             logger = logging.getLogger(__name__)
             logger.warning(f"Rate limit check failed for {phone_number}. This might be a Redis connection issue.")
@@ -341,11 +318,9 @@ class SendVerificationCodeView(APIView):
                 status=status.HTTP_429_TOO_MANY_REQUESTS
             )
         
-        # 인증번호 생성
         sms_service = SolapiService()
         verification_code = sms_service.generate_verification_code()
         
-        # SMS 발송
         result = sms_service.send_verification_code(phone_number, verification_code)
         
         if not result['success']:
@@ -354,10 +329,8 @@ class SendVerificationCodeView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
         
-        # 인증번호를 Redis에 저장
         PhoneVerificationStorage.save_verification_code(phone_number, verification_code, expires_in_seconds=VERIFICATION_CODE_EXPIRES_SECONDS)
         
-        # 시도 횟수 초기화
         PhoneVerificationStorage.reset_attempts(phone_number)
         
         return Response(
@@ -367,9 +340,8 @@ class SendVerificationCodeView(APIView):
 
 
 class VerifyPhoneView(APIView):
-    """인증번호 검증 뷰"""
     permission_classes = [permissions.AllowAny]
-    authentication_classes = []  # 인증 불필요
+    authentication_classes = []
     serializer_class = PhoneVerifySerializer
     
     @extend_schema(
@@ -384,14 +356,12 @@ class VerifyPhoneView(APIView):
         }
     )
     def post(self, request):
-        """인증번호 검증"""
         serializer = PhoneVerifySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
         phone_number = serializer.validated_data['phone_number']
         code = serializer.validated_data['code']
         
-        # 시도 횟수 확인 (최대 5회)
         attempts = PhoneVerificationStorage.get_attempts(phone_number)
         if attempts >= 5:
             return Response(
@@ -399,7 +369,6 @@ class VerifyPhoneView(APIView):
                 status=status.HTTP_429_TOO_MANY_REQUESTS
             )
         
-        # 인증번호 조회
         stored_code = PhoneVerificationStorage.get_verification_code(phone_number)
         
         if not stored_code:
@@ -409,7 +378,6 @@ class VerifyPhoneView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # 인증번호 일치 확인
         if stored_code != code:
             PhoneVerificationStorage.increment_attempts(phone_number)
             remaining_attempts = 5 - PhoneVerificationStorage.get_attempts(phone_number)
@@ -418,16 +386,12 @@ class VerifyPhoneView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # 인증 성공
-        # 인증번호 삭제
         PhoneVerificationStorage.delete_verification_code(phone_number)
         
-        # 인증 완료 토큰 생성 및 저장
         import uuid
         verified_token = str(uuid.uuid4())
         PhoneVerificationStorage.save_verified_token(phone_number, verified_token, expires_in_seconds=VERIFIED_TOKEN_EXPIRES_SECONDS)
         
-        # 시도 횟수 초기화
         PhoneVerificationStorage.reset_attempts(phone_number)
         
         return Response(
@@ -441,7 +405,6 @@ class VerifyPhoneView(APIView):
 
 
 class DeviceListView(APIView):
-    """기기 목록 조회 및 등록"""
     permission_classes = [permissions.IsAuthenticated]
     
     @extend_schema(
@@ -488,12 +451,7 @@ class DevicePrivateKeyView(APIView):
     @extend_schema(
         tags=['Device'],
         summary='기기의 암호화된 개인키 가져오기',
-        description='''
-        새 기기에서 로그인 시 기존 기기의 암호화된 개인키를 가져옵니다.
-        보안: 
-        - 주 기기(is_primary)는 항상 키를 가져올 수 있습니다.
-        - 그 외 기기는 최근 24시간 이내에 활성화된 경우만 허용됩니다.
-        ''',
+        description='새 기기에서 로그인 시 기존 기기의 암호화된 개인키를 가져옵니다.',
         responses={
             200: DevicePrivateKeyResponseSerializer,
             403: OpenApiResponse(description='보안상 접근 불가 (비활성 기기)'),
@@ -501,7 +459,7 @@ class DevicePrivateKeyView(APIView):
         }
     )
     def get(self, request, device_id):
-        """특정 기기의 암호화된 개인키 가져오기"""
+        """기기의 암호화된 개인키 가져오기"""
         from datetime import timedelta
 
         from django.utils import timezone
@@ -514,7 +472,6 @@ class DevicePrivateKeyView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        # 보안: 주 기기는 항상 허용, 그 외는 최근 활동이 있는 기기만 허용 (24시간 이내)
         if not device.is_primary:
             time_threshold = timezone.now() - timedelta(hours=24)
             if device.last_active < time_threshold:
@@ -531,7 +488,6 @@ class DevicePrivateKeyView(APIView):
 
 
 class UserDevicesPublicView(APIView):
-    """사용자의 기기 공개 정보 조회 (다른 사용자가 조회)"""
     permission_classes = [permissions.IsAuthenticated]
     
     @extend_schema(
@@ -577,14 +533,7 @@ class UserDeleteView(APIView):
     @extend_schema(
         tags=['User'],
         summary='회원 탈퇴',
-        description='''
-        회원 탈퇴를 진행합니다.
-        
-        주의사항:
-        - 모든 데이터가 영구적으로 삭제됩니다 (채팅, 친구, 기기 등)
-        - 삭제된 데이터는 복구할 수 없습니다
-        - 비밀번호 확인과 "회원탈퇴" 문구 입력이 필요합니다
-        ''',
+        description='회원 탈퇴를 진행합니다.',
         request=UserDeleteSerializer,
         responses={
             200: MessageResponseSerializer,
@@ -599,16 +548,8 @@ class UserDeleteView(APIView):
         user = request.user
         user_id = user.id
         
-        # 1. 모든 Refresh Token 삭제 (모든 기기에서 로그아웃)
         RefreshTokenStorage.delete_all_user_tokens(user_id)
         
-        # 2. 사용자 삭제 (CASCADE로 연관 데이터 자동 삭제)
-        # - UserDevice (기기)
-        # - ChatRoomMember (채팅방 멤버십)
-        # - Message (메시지 - sender가 null로 변경됨)
-        # - Friend (친구 관계)
-        # - ChatFolder (채팅 폴더)
-        # - GroupChatInvitation (그룹챗 초대)
         user.delete()
         
         return Response(

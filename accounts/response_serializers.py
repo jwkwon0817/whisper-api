@@ -4,6 +4,7 @@ drf-spectacular에서 API 응답을 명확하게 표시하기 위한 시리얼�
 """
 
 from rest_framework import serializers
+
 from .serializers import UserSerializer
 
 
@@ -50,21 +51,6 @@ class UserPublicKeyResponseSerializer(serializers.Serializer):
     user_id = serializers.UUIDField(read_only=True)
     name = serializers.CharField(read_only=True)
     public_key = serializers.CharField(read_only=True, allow_null=True)
-
-
-class UserSearchItemSerializer(serializers.Serializer):
-    """사용자 검색 결과 아이템"""
-    id = serializers.UUIDField(read_only=True)
-    name = serializers.CharField(read_only=True)
-    profile_image = serializers.URLField(read_only=True, allow_null=True)
-    has_public_key = serializers.BooleanField(read_only=True)
-
-
-class UserSearchResponseSerializer(serializers.Serializer):
-    """사용자 검색 응답 시리얼라이저"""
-    results = UserSearchItemSerializer(many=True, read_only=True)
-    count = serializers.IntegerField(read_only=True)
-
 
 class DevicePublicItemSerializer(serializers.Serializer):
     """기기 공개 정보 아이템"""

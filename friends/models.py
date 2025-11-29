@@ -8,7 +8,6 @@ User = get_user_model()
 
 
 class Friend(models.Model):
-    """친구 관계 모델"""
     STATUS_CHOICES = [
         ('pending', '대기중'),
         ('accepted', '수락됨'),
@@ -37,7 +36,6 @@ class Friend(models.Model):
         return f"{self.requester.name} -> {self.receiver.name} ({self.status})"
     
     def clean(self):
-        """검증: 자기 자신에게 친구 요청 불가"""
         if self.requester == self.receiver:
             raise ValidationError('자기 자신에게 친구 요청을 보낼 수 없습니다.')
     

@@ -4,8 +4,6 @@ from .models import Asset
 
 
 class AssetSerializer(serializers.ModelSerializer):
-    """Asset 시리얼라이저"""
-    
     class Meta:
         model = Asset
         fields = ['id', 'url', 'file_name', 'file_size', 'content_type']

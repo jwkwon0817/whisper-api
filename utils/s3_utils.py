@@ -11,8 +11,6 @@ from common.models import Asset
 
 
 class S3Uploader:
-    """S3 파일 업로드 유틸리티 클래스"""
-    
     def __init__(self):
         s3_config = {
             'aws_access_key_id': settings.S3_ACCESS_KEY_ID,
@@ -32,7 +30,6 @@ class S3Uploader:
             self.base_url = f"https://{self.bucket_name}.s3.{settings.S3_REGION}.amazonaws.com"
     
     def _generate_unique_filename(self, original_filename: str) -> str:
-        """UUID를 사용하여 고유한 파일명 생성"""
         ext = os.path.splitext(original_filename)[1]
         unique_filename = f"{uuid.uuid4()}{ext}"
         return unique_filename

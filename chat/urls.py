@@ -1,16 +1,25 @@
 from django.urls import path
+
 from .views import (
-    AllChatInvitationListView, ChatFolderDetailView, ChatFolderListView,
-    ChatFolderRoomAddView, ChatFolderRoomRemoveView, ChatRoomDetailView, ChatRoomLeaveView,
-    ChatRoomListView, DirectChatCreateView,
+    AllChatInvitationListView,
+    ChatFolderDetailView,
+    ChatFolderListView,
+    ChatFolderRoomAddView,
+    ChatFolderRoomRemoveView,
+    ChatRoomDetailView,
+    ChatRoomLeaveView,
+    ChatRoomListView,
+    DirectChatCreateView,
     DirectChatInvitationResponseView,
     GroupChatCreateView,
-    GroupChatInvitationResponseView, GroupChatInvitationView, MessageListView,
-    MessageReadView, MessageDetailView
+    GroupChatInvitationResponseView,
+    GroupChatInvitationView,
+    MessageDetailView,
+    MessageListView,
+    MessageReadView,
 )
 
 urlpatterns = [
-    # Chat Room endpoints
     path('chat/rooms/', ChatRoomListView.as_view(), name='chat-room-list'),
     path('chat/rooms/direct/', DirectChatCreateView.as_view(), name='direct-chat-create'),
     path('chat/rooms/group/', GroupChatCreateView.as_view(), name='group-chat-create'),
@@ -21,12 +30,10 @@ urlpatterns = [
     path('chat/rooms/<uuid:room_id>/messages/read/', MessageReadView.as_view(), name='message-read'),
     path('chat/rooms/<uuid:room_id>/invitations/', GroupChatInvitationView.as_view(), name='group-chat-invitation'),
     
-    # Invitation endpoints
-    path('chat/invitations/', AllChatInvitationListView.as_view(), name='all-chat-invitation-list'),  # 통합 초대 목록 (1:1 + 그룹)
-    path('chat/invitations/direct/<uuid:invitation_id>/', DirectChatInvitationResponseView.as_view(), name='direct-chat-invitation-response'),  # 1:1 초대 수락/거절
-    path('chat/invitations/group/<uuid:invitation_id>/', GroupChatInvitationResponseView.as_view(), name='group-chat-invitation-response'),  # 그룹 초대 수락/거절
+    path('chat/invitations/', AllChatInvitationListView.as_view(), name='all-chat-invitation-list'),
+    path('chat/invitations/direct/<uuid:invitation_id>/', DirectChatInvitationResponseView.as_view(), name='direct-chat-invitation-response'),
+    path('chat/invitations/group/<uuid:invitation_id>/', GroupChatInvitationResponseView.as_view(), name='group-chat-invitation-response'),
     
-    # Chat Folder endpoints
     path('chat/folders/', ChatFolderListView.as_view(), name='chat-folder-list'),
     path('chat/folders/<uuid:folder_id>/', ChatFolderDetailView.as_view(), name='chat-folder-detail'),
     path('chat/folders/<uuid:folder_id>/rooms/', ChatFolderRoomAddView.as_view(), name='chat-folder-room-add'),

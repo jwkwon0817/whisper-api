@@ -1,14 +1,10 @@
 import re
-from typing import Any, Dict
 
-from django.conf import settings
 from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
-from common.models import Asset
-from utils.encryption import EncryptionService
 from utils.s3_utils import S3Uploader
 
 from .models import User, UserDevice
@@ -16,8 +12,6 @@ from .utils import PhoneVerificationStorage
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
-    """전화번호 원문으로 로그인할 수 있도록 하는 커스텀 serializer"""
-    
     phone_number = serializers.CharField()
     device_fingerprint = serializers.CharField(required=False, allow_blank=True, 
                                                help_text='기기 지문 (선택사항, 기존 기기 확인용)')
@@ -28,7 +22,6 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             del self.fields['username']
     
     def validate(self, attrs):
-        """전화번호를 암호화하여 사용자 검색 및 인증"""
         phone_number = attrs.get('phone_number')
         password = attrs.get('password')
         device_fingerprint = attrs.get('device_fingerprint', '').strip()
@@ -38,12 +31,9 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 'phone_number': '전화번호와 비밀번호를 입력해주세요.'
             })
         
-        # Django의 authenticate 함수 사용 (UserManager.get_by_natural_key 활용)
-        # authenticate는 username과 password를 받아서 사용자를 찾고 비밀번호를 확인합니다
-        # 우리의 경우 username이 phone_number이므로, 원문 전화번호를 그대로 전달
         user = authenticate(
             request=self.context.get('request'),
-            username=phone_number,  # 원문 전화번호 전달
+            username=phone_number, 
             password=password
         )
         
@@ -57,15 +47,12 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 'phone_number': '비활성화된 계정입니다.'
             })
         
-        # 토큰 생성 (부모 클래스의 get_token 메서드 사용)
         refresh = self.get_token(user)
         
-        # 부모 클래스의 validate 메서드가 반환하는 형식과 동일하게 반환
         data = {}
         data['refresh'] = str(refresh)
         data['access'] = str(refresh.access_token)
         
-        # 기기 지문이 제공되었으면 기존 기기 확인 및 last_active 업데이트
         device_registered = False
         device_id = None
         
@@ -75,12 +62,10 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                     user=user,
                     device_fingerprint=device_fingerprint
                 )
-                # 기존 기기 - last_active 업데이트
-                device.save()  # auto_now=True로 인해 자동 업데이트
+                device.save()  
                 device_registered = True
                 device_id = device.id
             except UserDevice.DoesNotExist:
-                # 새 기기 - 등록되지 않음
                 device_registered = False
                 device_id = None
         
@@ -91,7 +76,6 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
 
 
 class UserSerializer(serializers.ModelSerializer):
-    """사용자 정보 시리얼라이저"""
     masked_phone_number = serializers.SerializerMethodField()
     
     class Meta:
@@ -100,17 +84,13 @@ class UserSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'masked_phone_number']
     
     def get_masked_phone_number(self, obj: User) -> str:
-        """마스킹된 전화번호 반환"""
         return obj.get_masked_phone_number()
 
 
 class PhoneVerificationSerializer(serializers.Serializer):
-    """인증번호 전송 시리얼라이저"""
     phone_number = serializers.CharField(required=True, max_length=20)
     
     def validate_phone_number(self, value):
-        """전화번호 형식 검증"""
-        # 한국 전화번호 형식: 01012345678
         pattern = r'^01[0-9]{9}$'
         if not re.match(pattern, value):
             raise serializers.ValidationError("올바른 전화번호 형식이 아닙니다. (예: 01012345678)")
@@ -118,32 +98,27 @@ class PhoneVerificationSerializer(serializers.Serializer):
 
 
 class PhoneVerifySerializer(serializers.Serializer):
-    """인증번호 검증 시리얼라이저"""
     phone_number = serializers.CharField(required=True, max_length=20)
     code = serializers.CharField(required=True, max_length=6, min_length=6)
     
     def validate_phone_number(self, value):
-        """전화번호 형식 검증"""
         pattern = r'^01[0-9]{9}$'
         if not re.match(pattern, value):
             raise serializers.ValidationError("올바른 전화번호 형식이 아닙니다.")
         return value
     
     def validate_code(self, value):
-        """인증번호 형식 검증"""
         if not value.isdigit():
             raise serializers.ValidationError("인증번호는 숫자만 입력 가능합니다.")
         return value
 
 
 class UserRegistrationSerializer(serializers.ModelSerializer):
-    """회원가입 시리얼라이저"""
     password = serializers.CharField(write_only=True, required=True, validators=[validate_password])
     profile_image = serializers.ImageField(required=False, allow_null=True)
     verified_token = serializers.CharField(required=True, write_only=True)
     public_key = serializers.CharField(required=False, allow_blank=True, allow_null=True, 
                                        help_text='E2EE 공개키 (PEM 형식). 선택사항이며 나중에 프로필 수정으로 추가 가능합니다.')
-    # 기기 정보 (선택사항)
     device_name = serializers.CharField(
         required=False, 
         allow_blank=True, 
@@ -175,7 +150,6 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         }
     
     def validate_verified_token(self, value):
-        """인증 토큰 검증"""
         phone_number = self.initial_data.get('phone_number')
         if not phone_number:
             raise serializers.ValidationError("전화번호가 필요합니다.")
@@ -187,21 +161,17 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         return value
     
     def validate_phone_number(self, value):
-        """전화번호 중복 확인 (암호화된 값 복호화 후 비교)"""
         from utils.encryption import EncryptionService
 
-        # 모든 사용자를 가져와서 복호화 후 비교
         for user in User.objects.all():
             if EncryptionService.check_phone_number(value, user.phone_number):
                 raise serializers.ValidationError("이미 가입된 전화번호입니다.")
         return value
     
     def validate_public_key(self, value):
-        """공개키 형식 검증 (PEM 형식 확인)"""
         if not value:
             return value
         
-        # PEM 형식 검증 (간단한 검증)
         if not value.startswith('-----BEGIN PUBLIC KEY-----'):
             raise serializers.ValidationError("공개키는 PEM 형식이어야 합니다.")
         if not value.endswith('-----END PUBLIC KEY-----'):
@@ -210,12 +180,10 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         return value
     
     def validate(self, attrs):
-        """기기 정보 검증"""
         device_name = attrs.get('device_name')
         device_fingerprint = attrs.get('device_fingerprint')
         encrypted_private_key = attrs.get('encrypted_private_key')
         
-        # 기기 정보는 모두 제공되거나 모두 제공되지 않아야 함
         device_fields = [device_name, device_fingerprint, encrypted_private_key]
         provided_fields = [f for f in device_fields if f]
         
@@ -224,7 +192,6 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
                 '기기를 등록하려면 device_name, device_fingerprint, encrypted_private_key를 모두 제공해야 합니다.'
             )
         
-        # 기기 지문 중복 확인
         if device_fingerprint and UserDevice.objects.filter(device_fingerprint=device_fingerprint).exists():
             raise serializers.ValidationError({'device_fingerprint': '이미 등록된 기기입니다.'})
         
@@ -236,19 +203,16 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         profile_image_file = validated_data.pop('profile_image', None)
         password = validated_data.pop('password')
         
-        # 기기 정보 추출
         device_name = validated_data.pop('device_name', None)
         device_fingerprint = validated_data.pop('device_fingerprint', None)
         encrypted_private_key = validated_data.pop('encrypted_private_key', None)
         
-        # 인증 토큰 재검증 및 삭제
         stored_token = PhoneVerificationStorage.get_verified_token(phone_number)
         if not stored_token or stored_token != verified_token:
             raise serializers.ValidationError({'verified_token': '인증 토큰이 유효하지 않습니다.'})
         
         PhoneVerificationStorage.delete_verified_token(phone_number)
         
-        # 프로필 이미지가 있으면 S3에 업로드
         profile_image_url = None
         if profile_image_file:
             uploader = S3Uploader()
@@ -261,14 +225,12 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             except Exception as e:
                 raise serializers.ValidationError({'profile_image': f'이미지 업로드 실패: {str(e)}'})
         
-        # 사용자 생성
         user = User.objects.create_user(
             password=password,
             profile_image=profile_image_url,
             **validated_data
         )
         
-        # 기기 정보가 제공되었으면 첫 기기로 등록
         if device_name and device_fingerprint and encrypted_private_key:
             UserDevice.objects.create(
                 user=user,
@@ -282,18 +244,15 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 
 
 class PublicKeySerializer(serializers.Serializer):
-    """공개키 등록 시리얼라이저"""
     public_key = serializers.CharField(
         required=True,
         help_text='E2EE 공개키 (PEM 형식)'
     )
     
     def validate_public_key(self, value):
-        """공개키 형식 검증 (PEM 형식 확인)"""
         if not value:
             raise serializers.ValidationError("공개키는 필수입니다.")
         
-        # PEM 형식 검증
         if not value.startswith('-----BEGIN PUBLIC KEY-----'):
             raise serializers.ValidationError("공개키는 PEM 형식이어야 합니다.")
         if not value.endswith('-----END PUBLIC KEY-----'):
@@ -303,7 +262,6 @@ class PublicKeySerializer(serializers.Serializer):
 
 
 class UserUpdateSerializer(serializers.ModelSerializer):
-    """사용자 정보 수정 시리얼라이저"""
     profile_image = serializers.ImageField(required=False, allow_null=True)
     
     class Meta:
@@ -311,11 +269,9 @@ class UserUpdateSerializer(serializers.ModelSerializer):
         fields = ['name', 'profile_image', 'public_key']
     
     def validate_public_key(self, value):
-        """공개키 형식 검증 (PEM 형식 확인)"""
         if not value:
             return value
         
-        # PEM 형식 검증
         if not value.startswith('-----BEGIN PUBLIC KEY-----'):
             raise serializers.ValidationError("공개키는 PEM 형식이어야 합니다.")
         if not value.endswith('-----END PUBLIC KEY-----'):
@@ -326,16 +282,12 @@ class UserUpdateSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         profile_image_file = validated_data.pop('profile_image', None)
         
-        # 새 프로필 이미지가 있으면 S3에 업로드
         if profile_image_file:
             uploader = S3Uploader()
             try:
-                # 기존 이미지가 있으면 Asset에서 찾아서 삭제 (선택사항)
                 if instance.profile_image:
-                    # URL에서 S3 key 추출하여 기존 파일 삭제 가능
                     pass
                 
-                # 새 이미지 업로드
                 asset, profile_image_url = uploader.upload_file(
                     profile_image_file,
                     folder='profiles',
@@ -370,13 +322,11 @@ class DevUserRegistrationSerializer(serializers.ModelSerializer):
         }
     
     def validate_phone_number(self, value):
-        """전화번호 형식 및 중복 확인"""
         import re
         pattern = r'^01[0-9]{9}$'
         if not re.match(pattern, value):
             raise serializers.ValidationError("올바른 전화번호 형식이 아닙니다. (예: 01012345678)")
         
-        # 중복 확인
         from utils.encryption import EncryptionService
         for user in User.objects.all():
             if EncryptionService.check_phone_number(value, user.phone_number):
@@ -384,11 +334,9 @@ class DevUserRegistrationSerializer(serializers.ModelSerializer):
         return value
     
     def validate_public_key(self, value):
-        """공개키 형식 검증 (PEM 형식 확인)"""
         if not value:
             return value
         
-        # PEM 형식 검증
         if not value.startswith('-----BEGIN PUBLIC KEY-----'):
             raise serializers.ValidationError("공개키는 PEM 형식이어야 합니다.")
         if not value.endswith('-----END PUBLIC KEY-----'):
@@ -397,12 +345,10 @@ class DevUserRegistrationSerializer(serializers.ModelSerializer):
         return value
     
     def validate(self, attrs):
-        """기기 정보 검증"""
         device_name = attrs.get('device_name')
         device_fingerprint = attrs.get('device_fingerprint')
         encrypted_private_key = attrs.get('encrypted_private_key')
         
-        # 기기 정보는 모두 제공되거나 모두 제공되지 않아야 함
         device_fields = [device_name, device_fingerprint, encrypted_private_key]
         provided_fields = [f for f in device_fields if f]
         
@@ -411,23 +357,19 @@ class DevUserRegistrationSerializer(serializers.ModelSerializer):
                 '기기를 등록하려면 device_name, device_fingerprint, encrypted_private_key를 모두 제공해야 합니다.'
             )
         
-        # 기기 지문 중복 확인
         if device_fingerprint and UserDevice.objects.filter(device_fingerprint=device_fingerprint).exists():
             raise serializers.ValidationError({'device_fingerprint': '이미 등록된 기기입니다.'})
         
         return attrs
     
     def create(self, validated_data):
-        """사용자 생성 (인증 토큰 검증 없이)"""
         profile_image_file = validated_data.pop('profile_image', None)
         password = validated_data.pop('password')
         
-        # 기기 정보 추출
         device_name = validated_data.pop('device_name', None)
         device_fingerprint = validated_data.pop('device_fingerprint', None)
         encrypted_private_key = validated_data.pop('encrypted_private_key', None)
         
-        # 프로필 이미지가 있으면 S3에 업로드
         profile_image_url = None
         if profile_image_file:
             uploader = S3Uploader()
@@ -499,13 +441,11 @@ class UserDeviceCreateSerializer(serializers.ModelSerializer):
         fields = ['device_name', 'device_fingerprint', 'encrypted_private_key']
     
     def validate_device_fingerprint(self, value):
-        """기기 지문 중복 확인"""
         if UserDevice.objects.filter(device_fingerprint=value).exists():
             raise serializers.ValidationError("이미 등록된 기기입니다.")
         return value
     
     def create(self, validated_data):
-        """기기 등록"""
         user = self.context['request'].user
         device = UserDevice.objects.create(
             user=user,
@@ -538,14 +478,12 @@ class UserDeleteSerializer(serializers.Serializer):
     )
     
     def validate_password(self, value):
-        """비밀번호 검증"""
         user = self.context['request'].user
         if not user.check_password(value):
             raise serializers.ValidationError("비밀번호가 올바르지 않습니다.")
         return value
     
     def validate_confirm_text(self, value):
-        """탈퇴 확인 문구 검증"""
         if value != '회원탈퇴':
             raise serializers.ValidationError('탈퇴 확인 문구가 올바르지 않습니다. "회원탈퇴"를 정확히 입력해주세요.')
         return value
