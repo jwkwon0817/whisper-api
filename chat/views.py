@@ -49,8 +49,6 @@ def get_room_or_404(room_id) -> Tuple[Optional[ChatRoom], Optional[Response]]:
         )
 from .response_serializers import (
     ChatRoomLeaveResponseSerializer,
-    ChatRoomMemberAddResponseSerializer,
-    ChatRoomMemberRemoveResponseSerializer,
     MessageListResponseSerializer,
     MessageReadResponseSerializer,
 )
@@ -59,12 +57,9 @@ from .serializers import (
     ChatFolderRoomAddSerializer,
     ChatFolderRoomSerializer,
     ChatFolderSerializer,
-    ChatFolderUpdateSerializer,
     ChatInvitationListSerializer,
-    ChatRoomMemberAddSerializer,
     ChatRoomMemberSerializer,
     ChatRoomSerializer,
-    ChatRoomUpdateSerializer,
     DirectChatCreateSerializer,
     DirectChatInvitationResponseSerializer,
     DirectChatInvitationSerializer,
@@ -341,53 +336,6 @@ class ChatRoomDetailView(APIView):
         serializer = ChatRoomSerializer(room, context={'request': request})
         return Response(serializer.data)
     
-    @extend_schema(
-        tags=['Chat'],
-        summary='채팅방 정보 수정',
-        description='그룹 채팅방의 이름과 설명을 수정합니다.',
-        request=ChatRoomUpdateSerializer,
-        responses={
-            200: ChatRoomSerializer,
-            403: OpenApiResponse(description='권한 없음'),
-            404: OpenApiResponse(description='채팅방을 찾을 수 없음'),
-        }
-    )
-    def patch(self, request, room_id):
-        """채팅방 정보 수정"""
-        room, error = get_room_or_404(room_id)
-        if error:
-            return error
-        
-        # 권한 확인 (방장 또는 관리자만 수정 가능)
-        member = ChatRoomMember.objects.filter(room=room, user=request.user).first()
-        if not member or member.role not in ['owner', 'admin']:
-            return Response(
-                {'error': '채팅방 정보를 수정할 권한이 없습니다.'},
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
-        # 1:1 채팅은 수정 불가
-        if room.room_type == 'direct':
-            return Response(
-                {'error': '1:1 채팅방은 수정할 수 없습니다.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # 정보 수정
-        name = request.data.get('name')
-        description = request.data.get('description')
-        
-        if name:
-            room.name = name
-        if description is not None:
-            room.description = description
-        
-        room.save()
-        
-        serializer = ChatRoomSerializer(room, context={'request': request})
-        return Response(serializer.data)
-
-
 class MessageListView(APIView):
     """메시지 목록 조회 및 전송"""
     permission_classes = [permissions.IsAuthenticated]
@@ -487,8 +435,8 @@ class MessageListView(APIView):
             )
         
         serializer = MessageCreateSerializer(
-            data={**request.data, 'room': room_id},
-            context={'request': request}
+            data=request.data,
+            context={'request': request, 'room': room}
         )
         serializer.is_valid(raise_exception=True)
         message = serializer.save()
@@ -846,42 +794,6 @@ class ChatFolderDetailView(APIView):
     
     @extend_schema(
         tags=['Chat'],
-        summary='폴더 수정',
-        description='폴더의 이름과 색상을 수정합니다.',
-        request=ChatFolderUpdateSerializer,
-        responses={
-            200: ChatFolderSerializer,
-            404: OpenApiResponse(description='폴더를 찾을 수 없음'),
-        }
-    )
-    def patch(self, request, folder_id):
-        """폴더 수정"""
-        try:
-            folder = ChatFolder.objects.get(id=folder_id, user=request.user)
-        except ChatFolder.DoesNotExist:
-            return Response(
-                {'error': '폴더를 찾을 수 없습니다.'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-        
-        name = request.data.get('name')
-        color = request.data.get('color')
-        icon = request.data.get('icon')
-        
-        if name:
-            folder.name = name
-        if color:
-            folder.color = color
-        if icon:
-            folder.icon = icon
-        
-        folder.save()
-        
-        serializer = ChatFolderSerializer(folder)
-        return Response(serializer.data)
-    
-    @extend_schema(
-        tags=['Chat'],
         summary='폴더 삭제',
         description='폴더를 삭제합니다. 폴더에 포함된 채팅방은 삭제되지 않습니다.',
         request=None,
@@ -904,8 +816,8 @@ class ChatFolderDetailView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-class ChatFolderRoomView(APIView):
-    """폴더에 채팅방 추가/제거"""
+class ChatFolderRoomAddView(APIView):
+    """폴더에 채팅방 추가"""
     permission_classes = [permissions.IsAuthenticated]
     
     @extend_schema(
@@ -963,6 +875,11 @@ class ChatFolderRoomView(APIView):
         
         serializer = ChatFolderRoomSerializer(folder_room, context={'request': request})
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class ChatFolderRoomRemoveView(APIView):
+    """폴더에서 채팅방 제거"""
+    permission_classes = [permissions.IsAuthenticated]
     
     @extend_schema(
         tags=['Chat'],
@@ -995,154 +912,6 @@ class ChatFolderRoomView(APIView):
         
         folder_room.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
-
-
-class ChatRoomMemberView(APIView):
-    """채팅방 멤버 관리 뷰"""
-    permission_classes = [permissions.IsAuthenticated]
-    
-    @extend_schema(
-        tags=['Chat'],
-        summary='채팅방 멤버 추가',
-        description='그룹 채팅방에 멤버를 추가합니다. (방장 또는 관리자만 가능)',
-        operation_id='chat_rooms_members_add',
-        request=ChatRoomMemberAddSerializer,
-        responses={
-            200: ChatRoomMemberAddResponseSerializer,
-            403: OpenApiResponse(description='권한 없음'),
-            404: OpenApiResponse(description='채팅방을 찾을 수 없음'),
-        }
-    )
-    def post(self, request, room_id):
-        """채팅방 멤버 추가"""
-        room, error = get_room_or_404(room_id)
-        if error:
-            return error
-        
-        # 1:1 채팅은 멤버 추가 불가
-        if room.room_type == 'direct':
-            return Response(
-                {'error': '1:1 채팅방에는 멤버를 추가할 수 없습니다.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # 권한 확인 (방장 또는 관리자만 추가 가능)
-        member = ChatRoomMember.objects.filter(room=room, user=request.user).first()
-        if not member or member.role not in ['owner', 'admin']:
-            return Response(
-                {'error': '멤버를 추가할 권한이 없습니다.'},
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
-        user_ids = request.data.get('user_ids', [])
-        if not user_ids:
-            return Response(
-                {'error': '추가할 사용자 ID 리스트가 필요합니다.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        added_members = []
-        for user_id in user_ids:
-            try:
-                user_to_add = User.objects.get(id=user_id)
-                # 이미 멤버인지 확인
-                if ChatRoomMember.objects.filter(room=room, user=user_to_add).exists():
-                    continue
-                
-                # 멤버 추가
-                new_member = ChatRoomMember.objects.create(
-                    room=room,
-                    user=user_to_add,
-                    role='member'
-                )
-                added_members.append(new_member)
-            except User.DoesNotExist:
-                continue
-        
-        serializer = ChatRoomMemberSerializer(added_members, many=True)
-        return Response({
-            'message': f'{len(added_members)}명의 멤버가 추가되었습니다.',
-            'added_members': serializer.data
-        }, status=status.HTTP_200_OK)
-    
-    @extend_schema(
-        tags=['Chat'],
-        summary='채팅방 멤버 제거',
-        description='그룹 채팅방에서 멤버를 제거합니다. (방장 또는 관리자만 가능, 본인은 나가기)',
-        operation_id='chat_rooms_members_remove',
-        request=None,
-        responses={
-            200: ChatRoomMemberRemoveResponseSerializer,
-            403: OpenApiResponse(description='권한 없음'),
-            404: OpenApiResponse(description='채팅방 또는 멤버를 찾을 수 없음'),
-        }
-    )
-    def delete(self, request, room_id, user_id):
-        """채팅방 멤버 제거"""
-        room, error = get_room_or_404(room_id)
-        if error:
-            return error
-        
-        # 1:1 채팅은 멤버 제거 불가 (채팅방 나가기는 채팅방 삭제로 처리)
-        if room.room_type == 'direct':
-            return Response(
-                {'error': '1:1 채팅방에서는 멤버를 제거할 수 없습니다.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # user_id가 현재 사용자와 같으면 본인 나가기
-        if user_id == request.user.id:
-            # 본인 나가기 로직 (ChatRoomLeaveView와 동일)
-            member = ChatRoomMember.objects.get(room=room, user=request.user)
-            member.delete()
-            
-            # 방장이 나가면 다른 멤버에게 방장 권한 이전
-            if room.created_by == request.user:
-                remaining_members = ChatRoomMember.objects.filter(room=room).exclude(user=request.user)
-                if remaining_members.exists():
-                    new_owner = remaining_members.first().user
-                    room.created_by = new_owner
-                    room.save()
-            
-            return Response({
-                'message': '채팅방을 나갔습니다.'
-            }, status=status.HTTP_200_OK)
-        
-        # 다른 멤버 제거 (방장 또는 관리자만 가능)
-        try:
-            member_to_remove = ChatRoomMember.objects.get(room=room, user_id=user_id)
-        except ChatRoomMember.DoesNotExist:
-            return Response(
-                {'error': '멤버를 찾을 수 없습니다.'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-        
-        # 본인 나가기인 경우
-        if member_to_remove.user == request.user:
-            member_to_remove.delete()
-            return Response({
-                'message': '채팅방을 나갔습니다.'
-            }, status=status.HTTP_200_OK)
-        
-        # 다른 멤버 제거인 경우 권한 확인
-        member = ChatRoomMember.objects.filter(room=room, user=request.user).first()
-        if not member or member.role not in ['owner', 'admin']:
-            return Response(
-                {'error': '멤버를 제거할 권한이 없습니다.'},
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
-        # 방장은 제거할 수 없음
-        if member_to_remove.role == 'owner':
-            return Response(
-                {'error': '방장은 제거할 수 없습니다.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        member_to_remove.delete()
-        return Response({
-            'message': '멤버가 제거되었습니다.'
-        }, status=status.HTTP_200_OK)
 
 
 class GroupChatInvitationView(APIView):
@@ -1255,34 +1024,6 @@ class GroupChatInvitationView(APIView):
         
         serializer = GroupChatInvitationSerializer(invitation, context={'request': request})
         return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-
-class GroupChatInvitationListView(APIView):
-    """받은 그룹챗 초대 목록 조회"""
-    permission_classes = [permissions.IsAuthenticated]
-    
-    @extend_schema(
-        tags=['Chat'],
-        summary='받은 그룹챗 초대 목록 조회',
-        description='내가 받은 그룹챗 초대 목록을 조회합니다.',
-        responses={
-            200: GroupChatInvitationSerializer(many=True),
-        }
-    )
-    def get(self, request):
-        """받은 그룹챗 초대 목록 조회"""
-        user = request.user
-        
-        # 받은 초대 중 대기 중인 것만 조회
-        invitations = GroupChatInvitation.objects.filter(
-            invitee=user,
-            status='pending'
-        ).select_related('room', 'inviter', 'invitee').prefetch_related(
-            Prefetch('room__members', queryset=ChatRoomMember.objects.select_related('user'))
-        ).order_by('-created_at')
-        
-        serializer = GroupChatInvitationSerializer(invitations, many=True, context={'request': request})
-        return Response(serializer.data)
 
 
 class GroupChatInvitationResponseView(APIView):
@@ -1412,32 +1153,6 @@ class DirectChatInvitationResponseView(APIView):
             
             invitation_serializer = DirectChatInvitationSerializer(invitation, context={'request': request})
             return Response(invitation_serializer.data)
-
-
-class DirectChatInvitationListView(APIView):
-    """1:1 채팅 초대 목록 조회"""
-    permission_classes = [permissions.IsAuthenticated]
-    
-    @extend_schema(
-        tags=['Chat'],
-        summary='1:1 채팅 초대 목록 조회',
-        description='내가 받은 1:1 채팅 초대 목록을 조회합니다. (대기 중인 초대만)',
-        responses={
-            200: DirectChatInvitationSerializer(many=True),
-        }
-    )
-    def get(self, request):
-        """받은 1:1 채팅 초대 목록 조회"""
-        user = request.user
-        
-        # 대기 중인 초대만 조회
-        invitations = DirectChatInvitation.objects.filter(
-            invitee=user,
-            status='pending'
-        ).select_related('inviter', 'invitee').order_by('-created_at')
-        
-        serializer = DirectChatInvitationSerializer(invitations, many=True, context={'request': request})
-        return Response(serializer.data)
 
 
 class AllChatInvitationListView(APIView):

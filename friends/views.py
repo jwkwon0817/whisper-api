@@ -12,6 +12,7 @@ from .response_serializers import MessageResponseSerializer
 from .serializers import (
     FriendRequestSerializer,
     FriendResponseSerializer,
+    FriendListItemSerializer,
     FriendSerializer,
 )
 
@@ -104,7 +105,7 @@ class FriendListView(APIView):
         summary='친구 목록 조회',
         description='수락된 친구 목록을 조회합니다.',
         responses={
-            200: FriendSerializer(many=True),
+            200: FriendListItemSerializer(many=True),
         }
     )
     def get(self, request):
@@ -117,7 +118,21 @@ class FriendListView(APIView):
             status='accepted'
         ).select_related('requester', 'receiver').order_by('-updated_at')
         
-        serializer = FriendSerializer(friends, many=True)
+        # 상대방 정보만 추출
+        friend_list = []
+        for friend in friends:
+            # 현재 사용자가 아닌 상대방 정보만 추가
+            other_user = friend.receiver if friend.requester == user else friend.requester
+            friend_list.append({
+                'id': friend.id,  # 친구 관계 ID (삭제 시 사용)
+                'user': {
+                    'id': str(other_user.id),
+                    'name': other_user.name,
+                    'profile_image': other_user.profile_image,
+                }
+            })
+        
+        serializer = FriendListItemSerializer(friend_list, many=True)
         return Response(serializer.data)
 
 
@@ -130,7 +145,7 @@ class FriendRequestListView(APIView):
         summary='받은 친구 요청 목록 조회',
         description='내가 받은 친구 요청 목록을 조회합니다.',
         responses={
-            200: FriendSerializer(many=True),
+            200: FriendListItemSerializer(many=True),
         }
     )
     def get(self, request):
@@ -143,7 +158,19 @@ class FriendRequestListView(APIView):
             status='pending'
         ).select_related('requester', 'receiver').order_by('-created_at')
         
-        serializer = FriendSerializer(requests, many=True)
+        # 요청자 정보만 추출 (receiver는 항상 현재 사용자)
+        request_list = []
+        for friend_request in requests:
+            request_list.append({
+                'id': friend_request.id,  # 친구 관계 ID (응답 시 사용)
+                'user': {
+                    'id': str(friend_request.requester.id),
+                    'name': friend_request.requester.name,
+                    'profile_image': friend_request.requester.profile_image,
+                }
+            })
+        
+        serializer = FriendListItemSerializer(request_list, many=True)
         return Response(serializer.data)
 
 

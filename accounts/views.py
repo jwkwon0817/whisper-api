@@ -1,5 +1,5 @@
 from django.contrib.auth import get_user_model
-from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
+from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import permissions, status
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
@@ -19,28 +19,21 @@ from .response_serializers import (
     DevicePrivateKeyResponseSerializer,
     MessageResponseSerializer,
     PhoneVerifyResponseSerializer,
-    PublicKeyResponseSerializer,
     TokenPairResponseSerializer,
     TokenResponseSerializer,
     UserDevicesPublicResponseSerializer,
     UserPublicKeyResponseSerializer,
-    UserSearchResponseSerializer,
     VerificationCodeResponseSerializer,
 )
 from .serializers import (
     CustomTokenObtainPairSerializer,
-    DevUserRegistrationSerializer,
-    PasswordChangeSerializer,
     PhoneVerificationSerializer,
     PhoneVerifySerializer,
-    PublicKeySerializer,
     UserDeleteSerializer,
     UserDeviceCreateSerializer,
-    UserDevicePrivateKeySerializer,
     UserDeviceSerializer,
     UserRegistrationSerializer,
     UserSerializer,
-    UserUpdateSerializer,
 )
 from .sms_service import SolapiService
 from .utils import PhoneVerificationStorage, RefreshTokenStorage
@@ -57,13 +50,6 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         summary='로그인',
         description='''
         전화번호와 비밀번호로 로그인하고 JWT 토큰을 발급합니다.
-        
-        선택 항목:
-        - device_fingerprint: 기기 지문 (제공 시 기존 기기 확인 및 last_active 업데이트)
-        
-        응답:
-        - device_registered: 현재 기기가 등록되어 있는지 여부
-        - device_id: 등록된 기기 ID (없으면 null)
         ''',
         request=CustomTokenObtainPairSerializer,
         responses={
@@ -79,18 +65,16 @@ class CustomTokenObtainPairView(TokenObtainPairView):
             access_token = response.data.get('access')
             
             try:
-                # Access Token에서 user_id 추출
                 decoded_data = UntypedToken(access_token)
                 user_id = decoded_data['user_id']
                 
-                # Refresh Token을 Redis에 저장
                 RefreshTokenStorage.save_refresh_token(
                     user_id=user_id,
                     refresh_token=refresh_token,
                     expires_in_days=REFRESH_TOKEN_EXPIRES_DAYS
                 )
-            except (InvalidToken, TokenError) as e:
-                pass  # 에러 처리
+            except (InvalidToken, TokenError):
+                pass
         
         return response
 
@@ -164,20 +148,6 @@ class RegisterView(APIView):
         summary='회원가입',
         description='''
         새로운 사용자를 등록하고 JWT 토큰을 발급합니다.
-        
-        필수 항목:
-        - phone_number: 전화번호 (인증 완료된 번호)
-        - name: 이름
-        - password: 비밀번호 (최소 8자)
-        - verified_token: 전화번호 인증 완료 토큰
-        
-        선택 항목 (E2EE + 멀티 디바이스):
-        - public_key: E2EE 공개키 (PEM 형식)
-        - device_name: 기기 이름 (예: iPhone 14, Chrome on Mac)
-        - device_fingerprint: 기기 고유 식별자
-        - encrypted_private_key: 비밀번호로 암호화된 개인키 (JSON 문자열)
-        
-        ⚠️ 기기 정보는 3개 모두 제공하거나 모두 제공하지 않아야 합니다.
         ''',
         request={
             'multipart/form-data': {
@@ -270,29 +240,6 @@ class LogoutView(APIView):
         )
 
 
-class UserProfileView(APIView):
-    """사용자 프로필 관리 뷰"""
-    permission_classes = [permissions.IsAuthenticated]
-    parser_classes = [MultiPartParser, FormParser]  # 파일 업로드 지원
-    serializer_class = UserUpdateSerializer
-    
-    @extend_schema(
-        tags=['User'],
-        summary='정보 변경',
-        description='프로필 사진과 이름을 변경합니다.',
-        request=UserUpdateSerializer,
-        responses={
-            200: UserSerializer,
-        }
-    )
-    def patch(self, request):
-        """사용자 정보 수정"""
-        serializer = UserUpdateSerializer(request.user, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data)
-
-
 class UserMeView(APIView):
     """내 정보 조회 뷰"""
     permission_classes = [permissions.IsAuthenticated]
@@ -310,66 +257,6 @@ class UserMeView(APIView):
         """현재 사용자 정보 조회"""
         serializer = UserSerializer(request.user)
         return Response(serializer.data)
-
-
-class PasswordChangeView(APIView):
-    """비밀번호 변경 뷰"""
-    permission_classes = [permissions.IsAuthenticated]
-    serializer_class = PasswordChangeSerializer
-    
-    @extend_schema(
-        tags=['User'],
-        summary='비밀번호 변경',
-        description='사용자의 비밀번호를 변경합니다. 변경 후 모든 기기에서 로그아웃됩니다.',
-        request=PasswordChangeSerializer,
-        responses={
-            200: MessageResponseSerializer,
-            400: OpenApiResponse(description='잘못된 요청'),
-        }
-    )
-    def patch(self, request):
-        """비밀번호 변경"""
-        serializer = PasswordChangeSerializer(data=request.data, context={'request': request})
-        serializer.is_valid(raise_exception=True)
-        
-        user = request.user
-        user.set_password(serializer.validated_data['new_password'])
-        user.save()
-        
-        # 모든 Refresh Token 삭제 (보안상 강제 로그아웃)
-        RefreshTokenStorage.delete_all_user_tokens(user.id)
-        
-        return Response({'message': '비밀번호가 변경되었습니다.'}, status=status.HTTP_200_OK)
-
-
-class PublicKeyView(APIView):
-    """공개키 등록/수정 뷰"""
-    permission_classes = [permissions.IsAuthenticated]
-    serializer_class = PublicKeySerializer
-    
-    @extend_schema(
-        tags=['User'],
-        summary='공개키 등록/수정',
-        description='E2EE 공개키를 등록하거나 수정합니다.',
-        request=PublicKeySerializer,
-        responses={
-            200: PublicKeyResponseSerializer,
-            400: OpenApiResponse(description='잘못된 요청'),
-        }
-    )
-    def post(self, request):
-        """공개키 등록/수정"""
-        serializer = PublicKeySerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        
-        public_key = serializer.validated_data['public_key']
-        request.user.public_key = public_key
-        request.user.save(update_fields=['public_key'])
-        
-        return Response({
-            'message': '공개키가 등록되었습니다.',
-            'public_key': public_key
-        }, status=status.HTTP_200_OK)
 
 
 class UserPublicKeyView(APIView):
@@ -399,72 +286,6 @@ class UserPublicKeyView(APIView):
             'user_id': str(user.id),
             'name': user.name,
             'public_key': user.public_key
-        }, status=status.HTTP_200_OK)
-
-
-class UserSearchView(APIView):
-    """사용자 검색 뷰"""
-    permission_classes = [permissions.IsAuthenticated]
-    
-    @extend_schema(
-        tags=['User'],
-        summary='사용자 검색',
-        description='이름으로 사용자를 검색합니다. (1:1 채팅 생성 시 사용)',
-        parameters=[
-            OpenApiParameter(
-                name='q',
-                type=str,
-                location=OpenApiParameter.QUERY,
-                description='검색어 (이름)',
-                required=True
-            ),
-            OpenApiParameter(
-                name='limit',
-                type=int,
-                location=OpenApiParameter.QUERY,
-                description='결과 개수 제한',
-                required=False,
-                default=20
-            ),
-        ],
-        responses={
-            200: UserSearchResponseSerializer,
-        }
-    )
-    def get(self, request):
-        """사용자 검색"""
-        query = request.query_params.get('q', '').strip()
-        limit = int(request.query_params.get('limit', 20))
-        
-        if not query:
-            return Response(
-                {'error': '검색어를 입력해주세요.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        if len(query) < 2:
-            return Response(
-                {'error': '검색어는 최소 2자 이상이어야 합니다.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # 이름으로 검색 (본인 제외)
-        users = User.objects.filter(
-            name__icontains=query
-        ).exclude(id=request.user.id)[:limit]
-        
-        results = []
-        for user in users:
-            results.append({
-                'id': str(user.id),
-                'name': user.name,
-                'profile_image': user.profile_image,
-                'has_public_key': bool(user.public_key)
-            })
-        
-        return Response({
-            'results': results,
-            'count': len(results)
         }, status=status.HTTP_200_OK)
 
 
@@ -619,94 +440,6 @@ class VerifyPhoneView(APIView):
         )
 
 
-class DevRegisterView(APIView):
-    """개발 모드용 회원가입 뷰 (전화번호 인증 없이)"""
-    permission_classes = [permissions.AllowAny]
-    authentication_classes = []  # 인증 불필요
-    parser_classes = [MultiPartParser, FormParser]  # 파일 업로드 지원
-    
-    @extend_schema(
-        tags=['Auth'],
-        summary='[개발 모드] 회원가입 (인증 없이)',
-        description='''
-        개발 모드에서 전화번호 인증 없이 회원가입합니다. DEBUG=True일 때만 사용 가능합니다.
-        
-        필수 항목:
-        - phone_number: 전화번호
-        - name: 이름
-        - password: 비밀번호 (최소 8자)
-        
-        선택 항목 (E2EE + 멀티 디바이스):
-        - public_key: E2EE 공개키 (PEM 형식)
-        - device_name: 기기 이름 (예: iPhone 14, Chrome on Mac)
-        - device_fingerprint: 기기 고유 식별자
-        - encrypted_private_key: 비밀번호로 암호화된 개인키 (JSON 문자열)
-        
-        ⚠️ 기기 정보는 3개 모두 제공하거나 모두 제공하지 않아야 합니다.
-        ''',
-        request={
-            'multipart/form-data': {
-                'type': 'object',
-                'properties': {
-                    'phone_number': {'type': 'string', 'description': '전화번호 (예: 01012345678)'},
-                    'name': {'type': 'string', 'description': '이름'},
-                    'password': {'type': 'string', 'format': 'password', 'description': '비밀번호 (최소 8자)'},
-                    'profile_image': {'type': 'string', 'format': 'binary', 'description': '프로필 이미지 (선택사항)'},
-                    'public_key': {'type': 'string', 'description': 'E2EE 공개키 (PEM 형식, 선택사항)'},
-                    'device_name': {'type': 'string', 'description': '기기 이름 (선택사항, 예: iPhone 14)'},
-                    'device_fingerprint': {'type': 'string', 'description': '기기 지문 (선택사항)'},
-                    'encrypted_private_key': {'type': 'string', 'description': '암호화된 개인키 (선택사항, JSON)'},
-                },
-                'required': ['phone_number', 'name', 'password']
-            },
-            'application/json': DevUserRegistrationSerializer,
-        },
-        responses={
-            201: TokenResponseSerializer,
-            400: OpenApiResponse(description='잘못된 요청'),
-            403: OpenApiResponse(description='개발 모드가 아닙니다'),
-        }
-    )
-    def post(self, request):
-        """개발 모드용 회원가입 - 전화번호 인증 없이 사용자 생성 후 JWT 토큰 발급"""
-        from django.conf import settings
-
-        # 개발 모드가 아니면 접근 불가
-        if not settings.DEBUG:
-            return Response(
-                {'error': '이 API는 개발 모드에서만 사용할 수 있습니다.'},
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
-        serializer = DevUserRegistrationSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        user = serializer.save()
-        
-        # JWT 토큰 생성
-        refresh = RefreshToken.for_user(user)
-        access_token = str(refresh.access_token)
-        refresh_token = str(refresh)
-        
-        # Refresh Token을 Redis에 저장
-        RefreshTokenStorage.save_refresh_token(
-            user_id=user.id,
-            refresh_token=refresh_token,
-            expires_in_days=REFRESH_TOKEN_EXPIRES_DAYS
-        )
-        
-        # 사용자 정보 시리얼라이저로 응답
-        user_serializer = UserSerializer(user)
-        
-        return Response(
-            {
-                'user': user_serializer.data,
-                'access': access_token,
-                'refresh': refresh_token,
-            },
-            status=status.HTTP_201_CREATED
-        )
-
-
 class DeviceListView(APIView):
     """기기 목록 조회 및 등록"""
     permission_classes = [permissions.IsAuthenticated]
@@ -746,55 +479,6 @@ class DeviceListView(APIView):
         
         result_serializer = UserDeviceSerializer(device)
         return Response(result_serializer.data, status=status.HTTP_201_CREATED)
-
-
-class DeviceDetailView(APIView):
-    """기기 상세 조회 및 삭제"""
-    permission_classes = [permissions.IsAuthenticated]
-    
-    @extend_schema(
-        tags=['Device'],
-        summary='기기 상세 조회',
-        description='특정 기기의 상세 정보를 조회합니다.',
-        responses={
-            200: UserDeviceSerializer,
-            404: OpenApiResponse(description='기기를 찾을 수 없음'),
-        }
-    )
-    def get(self, request, device_id):
-        """기기 상세 조회"""
-        try:
-            device = UserDevice.objects.get(id=device_id, user=request.user)
-        except UserDevice.DoesNotExist:
-            return Response(
-                {'error': '기기를 찾을 수 없습니다.'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-        
-        serializer = UserDeviceSerializer(device)
-        return Response(serializer.data)
-    
-    @extend_schema(
-        tags=['Device'],
-        summary='기기 삭제',
-        description='기기를 목록에서 제거합니다. 해당 기기는 더 이상 메시지를 복호화할 수 없게 됩니다.',
-        responses={
-            204: OpenApiResponse(description='삭제 성공'),
-            404: OpenApiResponse(description='기기를 찾을 수 없음'),
-        }
-    )
-    def delete(self, request, device_id):
-        """기기 삭제"""
-        try:
-            device = UserDevice.objects.get(id=device_id, user=request.user)
-        except UserDevice.DoesNotExist:
-            return Response(
-                {'error': '기기를 찾을 수 없습니다.'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-        
-        device.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class DevicePrivateKeyView(APIView):

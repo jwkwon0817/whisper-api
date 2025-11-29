@@ -5,31 +5,43 @@ from accounts.models import User
 from .models import Friend
 
 
+class FriendUserSerializer(serializers.Serializer):
+    """친구 목록에 표시되는 사용자 정보 시리얼라이저"""
+    id = serializers.UUIDField(read_only=True, help_text="사용자 ID")
+    name = serializers.CharField(read_only=True, help_text="사용자 이름")
+    profile_image = serializers.URLField(read_only=True, allow_null=True, help_text="프로필 이미지 URL")
+
+
 class FriendSerializer(serializers.ModelSerializer):
     """친구 관계 시리얼라이저"""
-    requester = serializers.SerializerMethodField()
-    receiver = serializers.SerializerMethodField()
+    requester = FriendUserSerializer(read_only=True, help_text="요청자 정보")
+    receiver = FriendUserSerializer(read_only=True, help_text="수신자 정보")
     
     class Meta:
         model = Friend
         fields = ['id', 'requester', 'receiver', 'status', 'created_at', 'updated_at']
         read_only_fields = ['id', 'created_at', 'updated_at']
     
-    def get_requester(self, obj: Friend) -> dict:
-        """요청자 정보"""
-        return {
-            'id': str(obj.requester.id),
-            'name': obj.requester.name,
-            'profile_image': obj.requester.profile_image,
+    def to_representation(self, instance):
+        """직렬화 시 사용자 정보를 올바른 형식으로 변환"""
+        representation = super().to_representation(instance)
+        representation['requester'] = {
+            'id': str(instance.requester.id),
+            'name': instance.requester.name,
+            'profile_image': instance.requester.profile_image,
         }
-    
-    def get_receiver(self, obj: Friend) -> dict:
-        """수신자 정보"""
-        return {
-            'id': str(obj.receiver.id),
-            'name': obj.receiver.name,
-            'profile_image': obj.receiver.profile_image,
+        representation['receiver'] = {
+            'id': str(instance.receiver.id),
+            'name': instance.receiver.name,
+            'profile_image': instance.receiver.profile_image,
         }
+        return representation
+
+
+class FriendListItemSerializer(serializers.Serializer):
+    """친구 목록 아이템 시리얼라이저 (상대방 정보만 반환)"""
+    id = serializers.UUIDField(read_only=True, help_text="친구 관계 ID (삭제 시 사용)")
+    user = FriendUserSerializer(read_only=True, help_text="친구 사용자 정보")
 
 
 class FriendRequestSerializer(serializers.Serializer):

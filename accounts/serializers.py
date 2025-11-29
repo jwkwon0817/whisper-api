@@ -349,12 +349,10 @@ class UserUpdateSerializer(serializers.ModelSerializer):
 
 
 class DevUserRegistrationSerializer(serializers.ModelSerializer):
-    """개발 모드용 회원가입 시리얼라이저 (전화번호 인증 없이)"""
     password = serializers.CharField(write_only=True, required=True, validators=[validate_password])
     profile_image = serializers.ImageField(required=False, allow_null=True)
     public_key = serializers.CharField(required=False, allow_blank=True, allow_null=True, 
                                        help_text='E2EE 공개키 (PEM 형식). 선택사항입니다.')
-    # 기기 정보 (선택사항)
     device_name = serializers.CharField(required=False, allow_blank=True, max_length=100)
     device_fingerprint = serializers.CharField(required=False, allow_blank=True, max_length=255)
     encrypted_private_key = serializers.CharField(required=False, allow_blank=True)

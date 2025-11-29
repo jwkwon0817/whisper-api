@@ -40,7 +40,7 @@ class MessageSerializer(serializers.ModelSerializer):
     """메시지 시리얼라이저"""
     id = serializers.UUIDField(read_only=True, format='hex_verbose')  # UUID를 문자열로 직렬화
     room = serializers.UUIDField(read_only=True, format='hex_verbose')  # UUID를 문자열로 직렬화
-    sender = UserBasicSerializer(read_only=True)
+    sender = UserBasicSerializer(read_only=True, allow_null=True)
     asset = AssetSerializer(read_only=True)  # Asset 객체로 직렬화
     reply_to = serializers.SerializerMethodField()
     content = serializers.SerializerMethodField()
@@ -94,11 +94,18 @@ class MessageSerializer(serializers.ModelSerializer):
             elif reply_to.encrypted_content:
                 reply_content = '[암호화된 메시지]'
             
+            sender_data = None
+            if reply_to.sender:
+                sender_data = UserBasicSerializer(reply_to.sender).data
+            
             return {
                 'id': str(reply_to.id),
-                'sender': UserBasicSerializer(reply_to.sender).data,
+                'sender': sender_data,
                 'content': reply_content,
                 'message_type': reply_to.message_type,
+                'encrypted_content': reply_to.encrypted_content,
+                'encrypted_session_key': reply_to.encrypted_session_key,
+                'self_encrypted_session_key': reply_to.self_encrypted_session_key,
             }
         return None
 
@@ -223,12 +230,15 @@ class MessageCreateSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Message
-        fields = ['room', 'message_type', 'content', 'encrypted_content', 'encrypted_session_key', 'self_encrypted_session_key', 'asset', 'reply_to_id']
+        fields = ['message_type', 'content', 'encrypted_content', 'encrypted_session_key', 'self_encrypted_session_key', 'asset', 'reply_to_id']
     
     def validate(self, attrs):
         """채팅방 타입에 따른 검증"""
-        room = attrs.get('room')
+        # room은 path parameter에서 가져오므로 context에서 가져옴
+        room = self.context.get('room')
+        
         if not room:
+            # room이 context에 없으면 create 메서드에서 처리
             return attrs
         
         encrypted_content = attrs.get('encrypted_content')
@@ -242,10 +252,7 @@ class MessageCreateSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({
                     'encrypted_content': '1:1 채팅에서는 암호화된 메시지(encrypted_content)가 필수입니다.'
                 })
-            # 하이브리드 암호화 방식인 경우 encrypted_session_key도 필요
-            # 하지만 하위 호환성을 위해 encrypted_session_key가 없으면 기존 방식으로 처리 가능
-            # self_encrypted_session_key는 선택사항 (양방향 암호화 지원용)
-            # content는 빈 값 또는 메타데이터로 설정 가능
+
             if not content:
                 attrs['content'] = ''  # 빈 값으로 설정
         
@@ -272,7 +279,10 @@ class MessageCreateSerializer(serializers.ModelSerializer):
     
     def create(self, validated_data):
         reply_to_id = validated_data.pop('reply_to_id', None)
-        room = validated_data['room']
+        # room은 path parameter에서 가져옴 (view에서 context로 전달)
+        room = self.context.get('room')
+        if not room:
+            raise serializers.ValidationError({'room': '채팅방 정보가 없습니다.'})
         sender = self.context['request'].user
         
         # 채팅방 멤버인지 확인
@@ -287,6 +297,7 @@ class MessageCreateSerializer(serializers.ModelSerializer):
             except Message.DoesNotExist:
                 raise serializers.ValidationError({'reply_to_id': '존재하지 않는 메시지입니다.'})
         
+        validated_data['room'] = room
         validated_data['sender'] = sender
         validated_data['reply_to'] = reply_to
         
@@ -382,27 +393,11 @@ class MessageReadSerializer(serializers.Serializer):
     )
 
 
-class ChatRoomMemberAddSerializer(serializers.Serializer):
-    """채팅방 멤버 추가 시리얼라이저"""
-    user_ids = serializers.ListField(
-        child=serializers.UUIDField(),
-        required=True,
-        help_text="추가할 사용자 ID 리스트"
-    )
-
-
 class ChatFolderCreateSerializer(serializers.Serializer):
     """채팅방 폴더 생성 시리얼라이저"""
     name = serializers.CharField(required=True, max_length=100)
     color = serializers.CharField(required=False, max_length=7, default='#000000')
     icon = serializers.CharField(required=False, max_length=50, default='folder.fill')
-
-
-class ChatFolderUpdateSerializer(serializers.Serializer):
-    """채팅방 폴더 수정 시리얼라이저"""
-    name = serializers.CharField(required=False, max_length=100)
-    color = serializers.CharField(required=False, max_length=7)
-    icon = serializers.CharField(required=False, max_length=50)
 
 
 class ChatRoomUpdateSerializer(serializers.Serializer):
